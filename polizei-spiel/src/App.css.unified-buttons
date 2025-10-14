@@ -1,0 +1,114 @@
+
+/* ===== UNIFIED BUTTON SYSTEM (MINIMALISTISCH) ===== */
+
+/* Base Button Style - Minimalistisch wie Auto-Assign */
+.btn-unified {
+  padding: 8px 14px;
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+
+.btn-unified:hover {
+  background: var(--color-surface-secondary);
+  border-color: var(--color-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.btn-unified:active {
+  transform: translateY(0);
+}
+
+/* Primary Button (Blau) */
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-dark);
+  box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
+}
+
+/* Success Button (Grün) */
+.btn-success {
+  background: var(--color-success);
+  color: white;
+  border-color: var(--color-success);
+}
+
+.btn-success:hover {
+  background: #28c04c;
+  box-shadow: 0 4px 12px rgba(48, 209, 88, 0.3);
+}
+
+/* Danger Button (Rot) */
+.btn-danger {
+  background: var(--color-danger);
+  color: white;
+  border-color: var(--color-danger);
+}
+
+.btn-danger:hover {
+  background: #e03a30;
+  box-shadow: 0 4px 12px rgba(255, 69, 58, 0.3);
+}
+
+/* Warning Button (Orange) */
+.btn-warning {
+  background: var(--color-warning);
+  color: white;
+  border-color: var(--color-warning);
+}
+
+.btn-warning:hover {
+  background: #e68900;
+  box-shadow: 0 4px 12px rgba(255, 159, 10, 0.3);
+}
+
+/* Small Button */
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+/* Icon-only Button */
+.btn-icon {
+  padding: 6px;
+  min-width: 32px;
+  height: 32px;
+}
+
+/* Active State */
+.btn-unified.active {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2);
+}
+
+/* Disabled State */
+.btn-unified:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-unified:disabled:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}

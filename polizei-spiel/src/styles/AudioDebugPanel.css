@@ -1,0 +1,228 @@
+/* Audio Debug Panel */
+.audio-debug-toggle {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 10000;
+  background: rgba(10, 132, 255, 0.9);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: all 0.2s;
+}
+
+.audio-debug-toggle:hover {
+  background: rgba(10, 132, 255, 1);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.audio-debug-panel {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 10000;
+  background: rgba(28, 28, 30, 0.98);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  width: 400px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  color: #ffffff;
+}
+
+.audio-debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.audio-debug-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.audio-debug-close {
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.audio-debug-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.audio-debug-info {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.audio-debug-info p {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.audio-status-info {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.audio-status-info p {
+  margin: 4px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status-ok {
+  color: #30D158;
+  font-weight: 600;
+}
+
+.status-warn {
+  color: #FF9F0A;
+  font-weight: 600;
+}
+
+.status-error {
+  color: #FF453A;
+  font-weight: 600;
+}
+
+.audio-debug-enable-btn,
+.audio-debug-status-btn {
+  width: 100%;
+  background: rgba(48, 209, 88, 0.15);
+  border: 1px solid rgba(48, 209, 88, 0.3);
+  color: #30D158;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 8px;
+}
+
+.audio-debug-enable-btn:hover,
+.audio-debug-status-btn:hover {
+  background: rgba(48, 209, 88, 0.25);
+  border-color: rgba(48, 209, 88, 0.5);
+}
+
+.audio-debug-status-btn {
+  background: rgba(10, 132, 255, 0.15);
+  border: 1px solid rgba(10, 132, 255, 0.3);
+  color: #0A84FF;
+}
+
+.audio-debug-status-btn:hover {
+  background: rgba(10, 132, 255, 0.25);
+  border-color: rgba(10, 132, 255, 0.5);
+}
+
+.audio-debug-sounds {
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.audio-debug-sound-btn {
+  background: rgba(10, 132, 255, 0.15);
+  border: 1px solid rgba(10, 132, 255, 0.3);
+  color: #0A84FF;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+}
+
+.audio-debug-sound-btn:hover {
+  background: rgba(10, 132, 255, 0.25);
+  border-color: rgba(10, 132, 255, 0.5);
+  transform: translateX(4px);
+}
+
+.audio-debug-sound-btn:active {
+  transform: scale(0.98);
+}
+
+.audio-debug-sound-btn.test-btn {
+  background: rgba(255, 159, 10, 0.2);
+  border: 2px solid rgba(255, 159, 10, 0.5);
+  color: #FF9F0A;
+  font-weight: 700;
+}
+
+.audio-debug-sound-btn.test-btn:hover {
+  background: rgba(255, 159, 10, 0.3);
+  border-color: rgba(255, 159, 10, 0.7);
+}
+
+.audio-debug-sound-btn.html5-btn {
+  background: rgba(48, 209, 88, 0.2);
+  border: 2px solid rgba(48, 209, 88, 0.5);
+  color: #30D158;
+  font-weight: 700;
+}
+
+.audio-debug-sound-btn.html5-btn:hover {
+  background: rgba(48, 209, 88, 0.3);
+  border-color: rgba(48, 209, 88, 0.7);
+}
+
+.audio-debug-instructions {
+  padding: 16px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.audio-debug-instructions p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Scrollbar Styling */
+.audio-debug-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.audio-debug-panel::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.audio-debug-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.audio-debug-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

@@ -1,0 +1,3360 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import './App.css';
+import { getRoute, convertToLeafletFormat, getPointAlongRoute, getStraightLineRoute, calculateDistance } from './services/routingService';
+import StatisticsModal, { type Statistics } from './components/StatisticsModal';
+import { type ToastData } from './components/Toast';
+import type { LogEntry, LogEntryType } from './types/logs';
+import { soundManager } from './utils/soundEffects';
+import type { VehicleStatus, VehicleType, Vehicle, Call, Incident, Achievement } from './types';
+import { vehicleTypeConfigs } from './constants/vehicleTypes';
+import { frankfurtLocations } from './constants/locations';
+import { incidentTypes, incidentProcessingTimes, escalationRules } from './constants/incidents';
+import { getWeightedIncidentType, calculateMinETA, createIncidentIcon, calculateRealisticRouteDuration } from './utils/gameLogic';
+import { getRandomCallText, generateCallbackNumber } from './constants/callTexts';
+import { getRandomPOI, getPOICategoryForIncident } from './constants/frankfurtPOIs';
+import { getRealisticCallText } from './constants/realisticCallTexts';
+import { getAddressForLocation } from './constants/addresses';
+import { speakRequestMessages, type SpeakRequestReason } from './constants/radioMessages';
+import { incidentReports, getRandomReport, hasBackupRequest, getBackupRequest } from './constants/incidentReports';
+import CallModal from './components/CallModal';
+import BackupModal from './components/BackupModal';
+import SpeakRequestModal from './components/SpeakRequestModal';
+import ProtocolPanel from './components/ProtocolPanel';
+import AudioDebugPanel from './components/AudioDebugPanel';
+import { protocolLogger } from './utils/protocolLogger';
+import type { ProtocolEntry } from './types/protocol';
+import WeatherDisplay from './components/WeatherDisplay';
+import type { WeatherState } from './types/weather';
+import { weatherConditions, getWeatherDuration, getNextWeather, getWeatherOverlayClass } from './constants/weather';
+import { calculateFuelConsumption, calculateCrewFatigue, determineOutOfServiceReason, calculateOutOfServiceDuration, updateMaintenanceStatus, resetVehicleAfterService } from './utils/vehicleTimings';
+import { shouldTriggerMANV, getRandomMANVScenario, generateInvolvedCount } from './constants/manvScenarios';
+import RadioLog, { type RadioMessage } from './components/RadioLog';
+import { generateRadioMessage } from './constants/radioMessages';
+import { gasStations as fallbackGasStations } from './constants/gasStations';
+import { fetchGasStationsFromOSM, fetchPoliceStationsFromOSM } from './services/overpassService';
+import { policeStations as fallbackPoliceStations } from './constants/locations';
+import { getAutoAssignmentRecommendations } from './utils/smartAssignment';
+import { findNearestGasStation, shouldRefuel, calculateRefuelDuration, performShiftChange } from './utils/refuelingSystem';
+import { canHelicopterFly } from './constants/weather';
+import { useHotkeys } from './hooks/useHotkeys';
+import VehicleDetails from './components/VehicleDetails';
+import { generateFrankfurtCallsign } from './utils/callsigns';
+import { calculateDispatchDelay } from './constants/dispatchTimes';
+import { getDisplayPosition } from './utils/vehiclePositioning';
+// NEUE HELPER-IMPORTS (Zentralisierung)
+import { formatGameTime, getHoursAndMinutes } from './utils/timeHelpers';
+import { calculateRoute, usesAirRoute } from './utils/routeCalculator';
+import { isVehicleMoving, isVehicleAvailable } from './utils/vehicleHelpers';
+import { getIncidentById, getIncidentPriorityText, needsMoreVehicles } from './utils/incidentHelpers';
+
+// Fix Leaflet default marker icon issue
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+// Types, constants, and helpers are imported from centralized modules
+// See: src/types, src/constants, src/utils for definitions
+
+// Local interfaces that are specific to this component
+interface VehicleMarkerProps {
+  position: [number, number];
+  bearing: number;
+  status: VehicleStatus;
+  vehicle: Vehicle;
+  hasSpecialRights: boolean; // Ob der Einsatz mit Sonderrechten ist
+}
+
+type Difficulty = 'Leicht' | 'Mittel' | 'Schwer';
+
+// Modern police station marker - Hessischer Polizeistern
+const createStationIcon = () => {
+  return L.divIcon({
+    className: 'station-marker',
+    html: `
+      <div class="station-marker-container">
+        <div style="width: 48px; height: 48px; background: rgba(48, 209, 88, 0.15); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+          <img src="/polizeistern-hessen.svg" alt="Polizeiwache" width="36" height="36" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2));" />
+        </div>
+      </div>
+    `,
+    iconSize: [48, 48],
+    iconAnchor: [24, 24],
+  });
+};
+
+// Gas Station Icon with Brand
+const createGasStationIcon = (brand: string) => {
+  const brandClass = brand.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // Known brands with custom CSS styles
+  const knownBrands = [
+    'aral', 'shell', 'esso', 'total', 'totalenergies', 'jet', 'omv',
+    'agip', 'eni', 'avia', 'hem', 'tamoil', 'star', 'orlen', 'bft',
+    'baywa', 'westfalen', 'classic', 'ed', 'raiffeisen', 'hoyer',
+    'oil', 'markant', 'sprint', 'elan', 'tankpool24', 'tankpool',
+    'famila', 'unknown', 'freie', 'keine', 'sonstige'
+  ];
+
+  // Check if brand has a custom style, otherwise generate initials
+  const hasCustomStyle = knownBrands.includes(brandClass);
+
+  if (hasCustomStyle) {
+    return L.divIcon({
+      className: 'gas-station-marker',
+      html: `
+        <div class="gas-station-marker-container">
+          <div class="gas-station-icon gas-station-${brandClass}"></div>
+        </div>
+      `,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    });
+  } else {
+    // Generate initials from brand name
+    const words = brand.split(/[\s-_]+/).filter(w => w.length > 0);
+    let initials = '';
+
+    if (words.length === 1) {
+      // Single word: take first 2-3 characters
+      initials = words[0].substring(0, Math.min(3, words[0].length)).toUpperCase();
+    } else {
+      // Multiple words: take first letter of each word (max 3)
+      initials = words.slice(0, 3).map(w => w[0]).join('').toUpperCase();
+    }
+
+    return L.divIcon({
+      className: 'gas-station-marker',
+      html: `
+        <div class="gas-station-marker-container">
+          <div class="gas-station-icon gas-station-generic" data-initials="${initials}"></div>
+        </div>
+      `,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    });
+  }
+};
+
+// Map center updater component
+const MapCenterUpdater: React.FC<{ center: [number, number]; zoom?: number }> = ({ center, zoom = 16 }) => {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, zoom, { animate: true, duration: 0.5 });
+  }, [center, zoom, map]);
+  return null;
+};
+
+// VehicleMarker component with independent Blaulicht animation
+const VehicleMarker: React.FC<VehicleMarkerProps> = ({ position, status, vehicle, hasSpecialRights }) => {
+  const [blaulichtOn, setBlaulichtOn] = useState(false);
+
+  // ECE-R65 / DIN 14620 compliant Blaulicht pattern - only for this vehicle
+  useEffect(() => {
+    // Only animate if vehicle is on mission (S3 or S4) AND has special rights
+    if (!hasSpecialRights || (status !== 'S3' && status !== 'S4')) {
+      setBlaulichtOn(false);
+      return;
+    }
+
+    let step = 0;
+    const pattern = [
+      { duration: 80, state: true },   // First flash
+      { duration: 80, state: false },  // Short pause between flashes
+      { duration: 80, state: true },   // Second flash (Doppelblitz)
+      { duration: 260, state: false }, // Pause until next group (~500ms total)
+    ];
+
+    const runPattern = () => {
+      setBlaulichtOn(pattern[step].state);
+      setTimeout(() => {
+        step = (step + 1) % pattern.length;
+        runPattern();
+      }, pattern[step].duration);
+    };
+
+    runPattern();
+  }, [status]);
+
+  // Determine which CSS class to use based on status and blaulicht state
+  const isBlaulichtActive = (status === 'S3' || status === 'S4') && blaulichtOn;
+  const vehicleClass = isBlaulichtActive ? 'vehicle-icon-blaulicht-on' : 'vehicle-icon-blaulicht-off';
+
+  // Status colors for label
+  const statusColors: Record<VehicleStatus, string> = {
+    'S1': '#30D158',  // Grün - Bereit
+    'S2': '#FFD60A',  // Gelb - Alarmiert
+    'S3': '#FF9F0A',  // Orange - Anfahrt
+    'S4': '#FF453A',  // Rot - Am Einsatzort
+    'S5': '#0A84FF',  // Blau - Sprechwunsch
+    'S6': '#8E8E93',  // Grau - Nicht einsatzbereit
+    'S7': '#FFD60A',  // Gelb - Tanken
+    'S8': '#0A84FF',  // Blau - Rückfahrt
+  };
+
+  const statusColor = statusColors[status];
+
+  const icon = L.divIcon({
+    className: 'vehicle-marker',
+    html: `
+      <div class="vehicle-marker-container">
+        <div class="${vehicleClass}"></div>
+        <div class="vehicle-label">
+          <span class="vehicle-label-status" style="background: ${statusColor};">${status}</span>
+          <span class="vehicle-label-callsign">${vehicle.callsign}</span>
+        </div>
+      </div>
+    `,
+    iconSize: [64, 80],
+    iconAnchor: [32, 40],
+  });
+
+  const statusLabels: Record<VehicleStatus, string> = {
+    'S1': 'Bereit',
+    'S2': 'Alarmiert',
+    'S3': 'Anfahrt',
+    'S4': 'Am Einsatzort',
+    'S5': 'Sprechwunsch',
+    'S6': 'Außer Dienst',
+    'S7': 'Tanken',
+    'S8': 'Rückfahrt'
+  };
+
+  return (
+    <Marker position={position} icon={icon}>
+      <Popup>
+        <strong>Fahrzeug S-{vehicle.id.toString().padStart(2, '0')}</strong><br />
+        Status: {statusLabels[status]}
+      </Popup>
+    </Marker>
+  );
+};
+
+// Achievement definitions
+const achievementDefinitions = [
+  {
+    id: 'first_response',
+    title: 'Erster Einsatz',
+    description: 'Schließe deinen ersten Einsatz erfolgreich ab',
+    icon: '🎖️',
+    condition: (stats: Statistics) => stats.totalResolved >= 1,
+  },
+  {
+    id: 'century',
+    title: 'Jahrhundert',
+    description: 'Schließe 100 Einsätze erfolgreich ab',
+    icon: '🏆',
+    condition: (stats: Statistics) => stats.totalResolved >= 100,
+  },
+  {
+    id: 'streak_10',
+    title: 'Im Flow',
+    description: 'Erreiche eine Serie von 10 erfolgreichen Einsätzen',
+    icon: '🔥',
+    condition: (stats: Statistics) => stats.currentStreak >= 10,
+  },
+  {
+    id: 'speed_demon',
+    title: 'Blitzschnell',
+    description: 'Durchschnittliche Reaktionszeit unter 60 Sekunden',
+    icon: '⚡',
+    condition: (stats: Statistics) => {
+      if (stats.totalResponseTimes.length === 0) return false;
+      const avg = stats.totalResponseTimes.reduce((a, b) => a + b, 0) / stats.totalResponseTimes.length;
+      return avg < 60;
+    },
+  },
+  {
+    id: 'perfect_shift',
+    title: 'Perfekte Schicht',
+    description: 'Keine fehlgeschlagenen Einsätze in einer Schicht mit 20+ Einsätzen',
+    icon: '💎',
+    condition: (stats: Statistics) => stats.totalResolved >= 20 && stats.totalFailed === 0,
+  },
+];
+
+// LocalStorage keys
+const STORAGE_KEYS = {
+  ACHIEVEMENTS: 'polizei_achievements',
+  STATS: 'polizei_stats',
+  HIGH_SCORE: 'polizei_high_score',
+};
+
+function App() {
+  const [gameStarted, setGameStarted] = useState(false);
+  const [selectedStation, setSelectedStation] = useState<number | null>(null);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [calls, setCalls] = useState<Call[]>([]); // NEW: Calls system
+  const [callIdCounter, setCallIdCounter] = useState(1); // NEW: Call ID counter
+  const [selectedCall, setSelectedCall] = useState<Call | null>(null); // NEU: Ausgewählter Anruf für Modal
+  const [isCallModalOpen, setIsCallModalOpen] = useState(false); // NEU: Call Modal State
+  const [selectedIncidentForBackup, setSelectedIncidentForBackup] = useState<Incident | null>(null); // Verstärkung Modal
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false); // Backup Modal State
+  const [selectedSpeakRequestVehicle, setSelectedSpeakRequestVehicle] = useState<Vehicle | null>(null); // Sprechwunsch Modal
+  const [isSpeakRequestModalOpen, setIsSpeakRequestModalOpen] = useState(false); // Sprechwunsch Modal State
+  const [score, setScore] = useState(0);
+  const [incidentCounter, setIncidentCounter] = useState(1);
+  const [mapCenter, setMapCenter] = useState<[number, number]>([50.1109, 8.6821]);
+  const [mapZoom, setMapZoom] = useState<number>(13);
+  const [isTimeDropdownOpen, setIsTimeDropdownOpen] = useState(false);
+
+  // State for features
+  const [selectedTime, setSelectedTime] = useState<number>(8);
+  const [gameTime, setGameTime] = useState<number>(8 * 60);
+  const [difficulty, setDifficulty] = useState<Difficulty>('Mittel');
+  const [gameSpeed, setGameSpeed] = useState<1 | 2 | 3 | 4>(1); // Spielgeschwindigkeit
+  const [isPaused, setIsPaused] = useState(false); // Pause-Status
+  const [statistics, setStatistics] = useState<Statistics>({
+    totalResolved: 0,
+    totalFailed: 0,
+    totalResponseTimes: [],
+    incidentsByType: {},
+    currentStreak: 0,
+    bestStreak: 0,
+    totalDistance: 0,
+  });
+  const [showStatsModal, setShowStatsModal] = useState(false);
+  const [_toasts, setToasts] = useState<ToastData[]>([]);
+  const [toastCounter, setToastCounter] = useState(1);
+  const [_logs, setLogs] = useState<LogEntry[]>([]);
+  const [logCounter, setLogCounter] = useState(1);
+  const [achievements, setAchievements] = useState<Achievement[]>([]);
+  const [showAchievementToast, setShowAchievementToast] = useState<Achievement | null>(null);
+  const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
+  const [vehicleFilter, setVehicleFilter] = useState<VehicleStatus | 'all'>('all'); // Filter für Fahrzeugliste
+
+  // Gas Stations from OpenStreetMap
+  const [gasStations, setGasStations] = useState<Array<{id: number; name: string; brand: string; position: [number, number]}>>([]);
+
+  // Police Stations from OpenStreetMap
+  const [policeStations, setPoliceStations] = useState<Array<{id: number; name: string; position: [number, number]}>>([]);
+
+  // RadioLog System
+  const [radioMessages, setRadioMessages] = useState<RadioMessage[]>([]);
+  const radioMessageIdRef = useRef(1);
+
+  // Log Filter System - wird durch ProtocolPanel gehandhabt
+
+  // Weather System
+  const [weather, setWeather] = useState<WeatherState>({
+    current: 'sunny',
+    duration: 120,
+    nextChange: 8 * 60 + 120,
+    forecast: 'rainy',
+  });
+  // Protocol System
+  const [showProtocolPanel, setShowProtocolPanel] = useState(false);
+  const [protocolEntries, setProtocolEntries] = useState<ProtocolEntry[]>([]);
+
+  // Load gas stations from OpenStreetMap on mount
+  useEffect(() => {
+    const loadGasStations = async () => {
+      const osmStations = await fetchGasStationsFromOSM();
+      if (osmStations.length > 0) {
+        // Convert OSM format to our format
+        const converted = osmStations.map(station => ({
+          id: station.id,
+          name: station.name,
+          brand: station.brand,
+          position: [station.lat, station.lon] as [number, number],
+        }));
+        setGasStations(converted);
+        console.log(`✓ Loaded ${converted.length} gas stations from OpenStreetMap`);
+      } else {
+        // Fallback to static data
+        setGasStations(fallbackGasStations);
+        console.log('⚠ Using fallback gas station data');
+      }
+    };
+    loadGasStations();
+  }, []);
+
+  // Load police stations from OpenStreetMap on mount
+  useEffect(() => {
+    const loadPoliceStations = async () => {
+      const osmStations = await fetchPoliceStationsFromOSM();
+      if (osmStations.length > 0) {
+        // Convert OSM format to our format
+        const converted = osmStations.map(station => ({
+          id: station.id,
+          name: station.name,
+          position: [station.lat, station.lon] as [number, number],
+        }));
+        setPoliceStations(converted);
+        console.log(`✓ Loaded ${converted.length} police stations from OpenStreetMap`);
+      } else {
+        // Fallback to static data
+        setPoliceStations(fallbackPoliceStations);
+        console.log('⚠ Using fallback police station data');
+      }
+    };
+    loadPoliceStations();
+  }, []);
+
+  // Load saved data on mount (mit Error Handling für LocalStorage)
+  useEffect(() => {
+    try {
+      const savedAchievements = localStorage.getItem(STORAGE_KEYS.ACHIEVEMENTS);
+      if (savedAchievements) {
+        setAchievements(JSON.parse(savedAchievements));
+      } else {
+        setAchievements(achievementDefinitions.map(a => ({ ...a, unlocked: false })));
+      }
+
+      const savedStats = localStorage.getItem(STORAGE_KEYS.STATS);
+      if (savedStats) {
+        setStatistics(JSON.parse(savedStats));
+      }
+    } catch (error) {
+      console.error('Fehler beim Laden der gespeicherten Daten:', error);
+      // Fallback: Neue Achievements initialisieren
+      setAchievements(achievementDefinitions.map(a => ({ ...a, unlocked: false })));
+    }
+  }, []);
+
+  // Save data whenever it changes (mit Error Handling für LocalStorage)
+  useEffect(() => {
+    if (gameStarted) {
+      try {
+        localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(statistics));
+        localStorage.setItem(STORAGE_KEYS.ACHIEVEMENTS, JSON.stringify(achievements));
+        if (score > 0) {
+          const highScore = localStorage.getItem(STORAGE_KEYS.HIGH_SCORE);
+          if (!highScore || score > parseInt(highScore)) {
+            localStorage.setItem(STORAGE_KEYS.HIGH_SCORE, score.toString());
+          }
+        }
+      } catch (error) {
+        console.error('Fehler beim Speichern der Daten:', error);
+      }
+    }
+  }, [statistics, achievements, score, gameStarted]);
+
+  // Check for new achievements
+  useEffect(() => {
+    achievements.forEach((achievement, index) => {
+      if (!achievement.unlocked) {
+        const def = achievementDefinitions.find(a => a.id === achievement.id);
+        if (def && def.condition(statistics)) {
+          const newAchievements = [...achievements];
+          newAchievements[index] = { ...achievement, unlocked: true };
+          setAchievements(newAchievements);
+          setShowAchievementToast(newAchievements[index]);
+          soundManager.playSuccessChime();
+          setTimeout(() => setShowAchievementToast(null), 5000);
+        }
+      }
+    });
+  }, [statistics, achievements]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (isTimeDropdownOpen && !target.closest('.custom-dropdown')) {
+        setIsTimeDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isTimeDropdownOpen]);
+
+  // Keyboard Shortcuts (LST-SIM Style)
+  useEffect(() => {
+    if (!gameStarted) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignoriere Tastatureingaben in Input-Feldern
+      const target = event.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      switch (event.key.toLowerCase()) {
+        case 'l':
+          setShowProtocolPanel(prev => !prev);
+          break;
+        case 'p':
+        case 'pause':
+          setIsPaused(prev => !prev);
+          break;
+        case 'y':
+          setGameSpeed(1);
+          setIsPaused(false);
+          break;
+        case 'x':
+          setGameSpeed(4);
+          setIsPaused(false);
+          break;
+        case 'escape':
+          if (showProtocolPanel) setShowProtocolPanel(false);
+          if (showStatsModal) setShowStatsModal(false);
+          if (isCallModalOpen) setIsCallModalOpen(false);
+          break;
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [gameStarted, showProtocolPanel, showStatsModal, isCallModalOpen]);
+
+  // Helper function to add log entry (nun mit protocolLogger)
+  const addLog = (
+    message: string,
+    type: LogEntryType,
+    options?: {
+      vehicleId?: number;
+      incidentId?: number;
+      priority?: 'low' | 'medium' | 'high';
+      location?: string;
+      statusFrom?: VehicleStatus;
+      statusTo?: VehicleStatus;
+    }
+  ) => {
+    // Timestamp mit zentralisiertem Helper
+    const timestamp = formatGameTime(gameTime);
+
+    setLogs((prev) => {
+      const newLogs = [
+        ...prev,
+        {
+          id: logCounter,
+          timestamp,
+          message,
+          type,
+        },
+      ];
+      return newLogs.slice(-50);
+    });
+    setLogCounter((prev) => prev + 1);
+
+    // Neues Protocol-System
+    const mapTypeToProtocol = (logType: LogEntryType): 'call' | 'assignment' | 'status' | 'radio' | 'completion' | 'failed' | 'system' | 'escalation' => {
+      const mapping: { [key in LogEntryType]: 'call' | 'assignment' | 'status' | 'radio' | 'completion' | 'failed' | 'system' | 'escalation' } = {
+        new: 'call',
+        assignment: 'assignment',
+        arrival: 'status',
+        completion: 'completion',
+        failed: 'failed',
+        system: 'system',
+        escalation: 'escalation',
+        call: 'call',
+      };
+      return mapping[logType] || 'system';
+    };
+
+    const vehicleCallsign = options?.vehicleId
+      ? `${vehicleTypeConfigs[vehicles.find(v => v.id === options.vehicleId)?.vehicleType || 'Streifenwagen'].displayName} ${options.vehicleId.toString().padStart(2, '0')}`
+      : undefined;
+
+    protocolLogger.addEntry(
+      mapTypeToProtocol(type),
+      message,
+      gameTime,
+      {
+        ...options,
+        vehicleCallsign,
+      }
+    );
+
+    setProtocolEntries(protocolLogger.getEntries());
+  };
+
+  // ⚡ Helper function to add radio message (LST-SIM Style)
+  const addRadioMessage = (
+    vehicleId: number,
+    statusFrom: VehicleStatus,
+    statusTo: VehicleStatus,
+    options?: {
+      incidentType?: string;
+      location?: string;
+      requiresResponse?: boolean;
+      customMessage?: string;
+    }
+  ) => {
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    if (!vehicle) return;
+
+    // Timestamp mit zentralisiertem Helper
+    const timestamp = formatGameTime(gameTime);
+    const vehicleCallsign = vehicle.callsign;
+
+    const message = options?.customMessage || generateRadioMessage(
+      vehicleCallsign,
+      statusFrom,
+      statusTo,
+      options?.incidentType,
+      options?.location
+    );
+
+    // Verwende Ref für atomare ID-Generierung (verhindert doppelte IDs im Strict Mode)
+    const messageId = radioMessageIdRef.current++;
+    const newMessage: RadioMessage = {
+      id: messageId,
+      timestamp,
+      vehicleCallsign,
+      message,
+      type: 'incoming',
+      requiresResponse: options?.requiresResponse || false,
+      vehicleId,
+    };
+
+    // Deduplizierung: Prüfe ob exakt dieselbe Nachricht bereits existiert
+    setRadioMessages(prev => {
+      const isDuplicate = prev.some(m =>
+        m.vehicleId === vehicleId &&
+        m.message === message &&
+        m.timestamp === timestamp &&
+        m.type === 'incoming'
+      );
+
+      if (isDuplicate) {
+        return prev; // Ignoriere Duplikat
+      }
+
+      // ⭐ UX #1: Radio-Click Sound bei jeder Funkm eldung
+      soundManager.playRadioClick();
+
+      return [...prev, newMessage].slice(-50);
+    });
+  };
+
+  // ⚡ HOTKEY-SYSTEM Integration
+  useHotkeys({
+    onEndMission: () => {
+      if (selectedVehicleId) {
+        const vehicle = vehicles.find(v => v.id === selectedVehicleId);
+        if (vehicle && vehicle.status === 'S4') {
+          // Einsatz sofort beenden
+          setVehicles(prev => prev.map(v =>
+            v.id === selectedVehicleId ? { ...v, processingStartTime: Date.now() - vehicle.processingDuration * 1000 } : v
+          ));
+          addLog(`🎮 HOTKEY: Fahrzeug ${selectedVehicleId} - Einsatz beendet`, 'system');
+        }
+      }
+    },
+    onReturnToStation: () => {
+      if (selectedVehicleId) {
+        const vehicle = vehicles.find(v => v.id === selectedVehicleId);
+        if (vehicle && (vehicle.status === 'S4' || vehicle.status === 'S5')) {
+          returnToStation(selectedVehicleId);
+          addLog(`🎮 HOTKEY: Fahrzeug ${selectedVehicleId} zurück zur Wache`, 'system');
+        }
+      }
+    },
+    onTogglePause: () => {
+      setIsPaused(prev => !prev);
+    },
+    onIncreaseSpeed: () => {
+      setGameSpeed(prev => Math.min(4, prev + 1) as 1 | 2 | 3 | 4);
+    },
+    onDecreaseSpeed: () => {
+      setGameSpeed(prev => Math.max(1, prev - 1) as 1 | 2 | 3 | 4);
+    },
+    onSelectVehicle: (vehicleId) => {
+      if (vehicles.find(v => v.id === vehicleId)) {
+        setSelectedVehicleId(vehicleId);
+        const vehicle = vehicles.find(v => v.id === vehicleId);
+        if (vehicle) {
+          setMapCenter(vehicle.position);
+          setMapZoom(16);
+        }
+      }
+    },
+    onClearSelection: () => {
+      setSelectedVehicleId(null);
+    },
+    onShiftChange: () => {
+      if (selectedVehicleId) {
+        const vehicle = vehicles.find(v => v.id === selectedVehicleId);
+        if (vehicle && vehicle.status === 'S2' && vehicle.crewFatigue > 60) {
+          setVehicles(prev => prev.map(v =>
+            v.id === selectedVehicleId ? performShiftChange(v, gameTime) : v
+          ));
+          setGameTime(t => t + 5); // Schichtwechsel dauert 5 Minuten
+          addLog(`👥 Schichtwechsel: Fahrzeug ${selectedVehicleId} - Neue Besatzung, Müdigkeit zurückgesetzt`, 'system');
+          addRadioMessage(
+            selectedVehicleId,
+            vehicle.status,
+            'S1',
+            {
+              customMessage: `Schichtwechsel durchgeführt`,
+            }
+          );
+        } else if (vehicle && vehicle.crewFatigue <= 60) {
+          addLog(`ℹ️ Fahrzeug ${selectedVehicleId}: Besatzung ist noch fit (${vehicle.crewFatigue.toFixed(0)}% Müdigkeit)`, 'system');
+        } else if (vehicle && vehicle.status !== 'S2') {
+          addLog(`⚠️ Fahrzeug ${selectedVehicleId}: Schichtwechsel nur an der Wache möglich (Status ${vehicle.status})`, 'system');
+        }
+      }
+    },
+  }, gameStarted);
+
+  // Get difficulty settings (lstsim.de style - realistic balance)
+  const getDifficultySettings = () => {
+    switch (difficulty) {
+      case 'Leicht':
+        return {
+          vehicleCount: 6,
+          vehicleTypes: ['Streifenwagen', 'Streifenwagen', 'Streifenwagen', 'Streifenwagen', 'SEK', 'Zivilfahrzeug'] as VehicleType[],
+          incidentsPerHour: 2.0,  // 2.0 Einsätze pro Stunde (Basis, wird durch Tageszeit modifiziert)
+          maxIncidents: 4,  // Erhöht für Realismus
+          baseTimeLimit: 90,
+        };
+      case 'Schwer':
+        return {
+          vehicleCount: 4,
+          vehicleTypes: ['Streifenwagen', 'Streifenwagen', 'SEK', 'Polizeihubschrauber'] as VehicleType[],
+          incidentsPerHour: 4.5,  // 4.5 Einsätze pro Stunde (Basis, wird durch Tageszeit modifiziert)
+          maxIncidents: 7,  // Erhöht für echte Herausforderung
+          baseTimeLimit: 45,
+        };
+      default: // Mittel
+        return {
+          vehicleCount: 5,
+          vehicleTypes: ['Streifenwagen', 'Streifenwagen', 'Streifenwagen', 'SEK', 'Zivilfahrzeug'] as VehicleType[],
+          incidentsPerHour: 3.0,  // 3.0 Einsätze pro Stunde (Basis, wird durch Tageszeit modifiziert)
+          maxIncidents: 5,  // Erhöht für Realismus
+          baseTimeLimit: 60,
+        };
+    }
+  };
+
+  // Initialize vehicles for selected station
+  const startGame = (stationId: number) => {
+    const station = policeStations.find(s => s.id === stationId);
+    if (!station) return;
+
+    setSelectedStation(stationId);
+    setMapCenter(station.position);
+    setGameTime(selectedTime * 60);
+
+    const settings = getDifficultySettings();
+    const newVehicles: Vehicle[] = [];
+
+    for (let i = 0; i < settings.vehicleCount; i++) {
+      const vehicleType = settings.vehicleTypes[i] || 'Streifenwagen';
+      const vehicleId = i + 1;
+      const callsign = generateFrankfurtCallsign(vehicleId, stationId, vehicleType);
+
+      newVehicles.push({
+        id: vehicleId,
+        stationId,
+        position: station.position,
+        assignedIncidentId: null,
+        routeIndex: 0,
+        route: null,
+        routeProgress: 0,
+        bearing: 0,
+        routeDuration: 0,
+        routeStartTime: 0,
+        totalDistanceTraveled: 0,
+        isAvailable: true,
+        status: 'S2', // S2: Frei auf Wache (echtes FMS-System)
+        processingStartTime: null,
+        processingDuration: 0,
+        // NEU: Fahrzeugtyp-spezifische Eigenschaften
+        vehicleType: vehicleType,
+        callsign: callsign,
+        speakRequest: null,
+        speakRequestType: undefined,
+        outOfServiceReason: null,
+        outOfServiceUntil: null,
+        canBeRedirected: true, // lstsim.de: S8-Fahrzeuge können umgeleitet werden
+        situationReportSent: false,
+        dispatchTime: null,
+        isPreparingToDepart: false,
+        previousStatus: null,
+        // Realistische Timings
+        fuelLevel: 100,
+        crewFatigue: 0,
+        maintenanceStatus: 'ok' as const,
+        lastRefuelTime: 0,
+        lastBreakTime: 0,
+        shiftStartTime: gameTime,
+        accumulatedTime: 0,
+      });
+    }
+
+    setVehicles(newVehicles);
+    setGameStarted(true);
+
+    // 🔊 Audio aktivieren bei Game-Start (User-Interaktion)
+    soundManager.enable();
+    console.log('[GAME] Audio-System aktiviert');
+
+    addLog(`Schicht begonnen in ${station.name}`, 'new');
+    setTimeout(() => generateIncident(), 2000);
+  };
+
+  // NEW: Generate random call (instead of incident directly) - LST SIM Style mit Gesprächstext
+  // ERWEITERT: Nutzt POI-System für realistische Orte und Kontexte
+  // MAXIMALE VARIATION: Jeden Spieldurchlauf anders gestalten
+  const generateCall = () => {
+    const hour = Math.floor(gameTime / 60);
+
+    // 🎲 ERHÖHTE ZUFÄLLIGKEIT: Manchmal ignoriere Tageszeit-Gewichtung
+    const ignoreTimeWeighting = Math.random() < 0.3; // 30% komplett zufällig
+
+    // ⚡ MANV-CHECK: Soll eine Großlage generiert werden?
+    const triggerMANV = shouldTriggerMANV(difficulty);
+
+    let incidentType;
+    let isMANV = false;
+    let manvScenario = null;
+    let involvedCount = 0;
+
+    if (triggerMANV) {
+      // 🚨 GROSSLAGE generieren!
+      manvScenario = getRandomMANVScenario();
+      involvedCount = generateInvolvedCount(manvScenario);
+      incidentType = {
+        type: manvScenario.type,
+        description: manvScenario.description,
+        priority: manvScenario.priority,
+        requiredVehicles: manvScenario.requiredVehicles
+      };
+      isMANV = true;
+
+    } else if (ignoreTimeWeighting) {
+      // Komplett zufälliger Einsatztyp (ohne Tageszeit-Gewichtung)
+      incidentType = incidentTypes[Math.floor(Math.random() * incidentTypes.length)];
+
+    } else {
+      // Tageszeit-gewichteter Einsatz
+      incidentType = getWeightedIncidentType(hour);
+
+    }
+
+    // 🎲 ERHÖHTE VARIATION: POI-Nutzung variieren (50-90% statt fix 70%)
+    const preferredCategory = getPOICategoryForIncident(incidentType.type);
+    const poiChance = 0.5 + Math.random() * 0.4; // 50-90% POI-Chance
+    const usePOI = preferredCategory && Math.random() < poiChance;
+
+    let location;
+    let callerText;
+    let callerType: 'witness' | 'victim' | 'resident' | 'business' | 'anonymous' | 'employee';
+    let callerName: string | undefined;
+
+    if (usePOI && preferredCategory) {
+      // 🎲 Manchmal nutze auch andere POI-Kategorien für Überraschungen
+      const useRandomCategory = Math.random() < 0.15; // 15% komplett zufällige Kategorie
+      const poi = useRandomCategory ? getRandomPOI() : getRandomPOI(preferredCategory);
+      location = { name: poi.name, position: poi.position };
+
+
+
+      // Hole POI-spezifischen, extrem realistischen Anrufertext
+      const realisticCall = getRealisticCallText(incidentType.type, poi.category, poi.name);
+
+      if (realisticCall) {
+        callerText = realisticCall.text;
+        callerType = realisticCall.callerType;
+        callerName = realisticCall.callerName;
+      } else {
+        // Fallback zu Standard-Texten
+        const fallback = getRandomCallText(incidentType.type);
+        callerText = fallback.text;
+        callerType = fallback.callerType;
+        callerName = fallback.callerName;
+      }
+    } else {
+      // Nutze normale Frankfurt-Locations
+      location = frankfurtLocations[Math.floor(Math.random() * frankfurtLocations.length)];
+      const callTextData = getRandomCallText(incidentType.type);
+      callerText = callTextData.text;
+      callerType = callTextData.callerType;
+      callerName = callTextData.callerName;
+    }
+
+    const hasCallbackNumber = Math.random() < 0.7; // 70% haben Rückrufnummer
+
+    // Bestimme ob es eine Privatadresse ist (residential POI oder kein POI)
+    const isPrivateAddress = !usePOI || (preferredCategory === 'residential');
+    const address = getAddressForLocation(location.name, isPrivateAddress);
+
+    const newCall = {
+      id: callIdCounter,
+      type: incidentType.type,
+      position: location.position as [number, number],
+      priority: incidentType.priority as 'low' | 'medium' | 'high',
+      description: incidentType.description,
+      locationName: location.name,
+      timestamp: Date.now(),
+      answered: false,
+      // NEU: LST SIM Style Eigenschaften
+      callerText: isMANV
+        ? `GROSSLAGE! ${manvScenario!.type} mit ca. ${involvedCount} Beteiligten! Sofort mehrere Einheiten entsenden!`
+        : callerText,
+      callerType: isMANV ? 'witness' : callerType,
+      callerName,
+      callbackNumber: hasCallbackNumber ? generateCallbackNumber() : undefined,
+      address, // Echte Adresse
+      status: 'waiting' as const,
+      // ⚡ MANV-Daten
+      isMANV,
+      involvedCount: isMANV ? involvedCount : undefined,
+    };
+
+    setCalls(prev => [...prev, newCall]);
+    setCallIdCounter(prev => prev + 1);
+
+    setToasts((prev) => [
+      ...prev,
+      {
+        id: toastCounter,
+        type: `Anruf: ${incidentType.type}`,
+        location: location.name,
+        priority: incidentType.priority as 'low' | 'medium' | 'high',
+        incidentId: callIdCounter,
+      },
+    ]);
+    setToastCounter((prev) => prev + 1);
+
+    if (incidentType.priority === 'high') {
+      soundManager.playAlertSound();
+    }
+
+    addLog(`Notruf eingehend: ${incidentType.type} in ${location.name}`, 'new');
+  };
+
+  // NEU: Öffne Call-Modal zum Anrufer-Gespräch
+  const openCallModal = (callId: number) => {
+    const call = calls.find(c => c.id === callId);
+    if (!call) return;
+
+    setSelectedCall(call);
+    setIsCallModalOpen(true);
+    soundManager.playSirenBeep();
+  };
+
+  // NEU: Lehne Anruf ab (Auflegen)
+  const rejectCall = (callId: number) => {
+    setCalls(prev => prev.map(c =>
+      c.id === callId ? { ...c, status: 'rejected' as const, answered: true } : c
+    ));
+    addLog(`Anruf abgelehnt: ${calls.find(c => c.id === callId)?.type || 'Unbekannt'}`, 'failed');
+
+    // Entferne abgelehnte Anrufe nach 3 Sekunden
+    setTimeout(() => {
+      setCalls(prev => prev.filter(c => c.id !== callId));
+    }, 3000);
+  };
+
+  // NEW: Accept call and create incident (nur noch aus Modal heraus aufrufbar)
+  // Mit optionaler direkter Fahrzeugzuweisung aus dem Modal + Sonderrechte-Option
+  const acceptCall = (callId: number, preAssignedVehicles?: number[], withSpecialRights: boolean = true) => {
+    const call = calls.find(c => c.id === callId);
+    if (!call) return;
+
+    const settings = getDifficultySettings();
+    const incidentType = incidentTypes.find(it => it.type === call.type);
+    if (!incidentType) return;
+
+    // Eskalationslogik: 10% Chance, kann eskalieren
+    const canEscalate = escalationRules[call.type] !== undefined && Math.random() < 0.1;
+    const escalationDelay = canEscalate ? 60 + Math.random() * 30 : 0; // 60-90 Sekunden
+
+    const newIncidentId = incidentCounter; // Speichere ID für spätere Verwendung
+    const newIncident = {
+      id: newIncidentId,
+      type: call.type,
+      position: call.position,
+      assignedVehicleIds: preAssignedVehicles || [], // Verwende vorausgewählte Fahrzeuge
+      priority: call.priority,
+      description: `${call.description} - ${call.locationName}`,
+      timeRemaining: settings.baseTimeLimit,
+      locationName: call.locationName,
+      spawnTime: Date.now(),
+      requiredVehicles: incidentType.requiredVehicles,
+      arrivedVehicles: 0,
+      processingDuration: incidentProcessingTimes[call.type] || 180,
+      canEscalate: canEscalate,
+      escalationTime: canEscalate ? Date.now() + escalationDelay * 1000 : null,
+      hasEscalated: false,
+      isMANV: call.isMANV || false,
+      involvedCount: call.involvedCount || 0,
+      withSpecialRights: withSpecialRights, // Mit/Ohne Sonderrechte vom Modal
+      speakRequestGiven: false, // Noch kein Sprechwunsch für diesen Einsatz
+      // LST-SIM Style Meldungen
+      backupRequested: false,
+      backupFulfilled: false,
+      backupVehiclesNeeded: 0,
+      initialReportGiven: false,
+    };
+
+    setIncidents(prev => [...prev, newIncident]);
+    setIncidentCounter(prev => prev + 1);
+
+    // Wenn Fahrzeuge bereits zugewiesen wurden, setze sie SOFORT auf S3 (INLINE)
+    if (preAssignedVehicles && preAssignedVehicles.length > 0) {
+
+
+      // INLINE State-Update mit prevVehicles Callback - keine Closure-Probleme!
+      setVehicles(prevVehicles => {
+        let isFirstVehicle = true; // Track ob es das erste Fahrzeug ist
+
+        return prevVehicles.map(v => {
+          if (!preAssignedVehicles.includes(v.id)) return v;
+          if (v.status !== 'S2' && !(v.status === 'S8' && v.canBeRedirected)) return v;
+
+          // Bestimme Startposition: Immer von Wache für S2, sonst aktuelle Position (S8 ist bereits unterwegs)
+          // WICHTIG: Für S2 IMMER station.position nutzen, nicht v.position (könnte veraltet sein!)
+          const vehicleStation = policeStations.find(s => s.id === v.stationId);
+          const startPosition = v.status === 'S2' && vehicleStation ? vehicleStation.position : v.position;
+
+          // Capture values in closure BEFORE any async operations
+          const vehicleId = v.id;
+          const isLeadVehicle = isFirstVehicle;
+          isFirstVehicle = false; // Nächstes ist nicht mehr das erste
+
+          // Setze auf S2 (Alarmierung) - noch nicht sichtbar
+          const updatedVehicle = {
+            ...v,
+            position: startPosition,  // WICHTIG: Setze Position explizit auf Startposition!
+            assignedIncidentId: newIncidentId,
+            status: 'S2' as VehicleStatus,
+            routeStartTime: Date.now(),
+            routeProgress: 0,
+            route: null,  // Wird async berechnet
+            accumulatedTime: 0,
+          };
+
+          // 🚨 Lead-Fahrzeug: Meldet Einsatzübernahme
+          if (isLeadVehicle) {
+            // Berechne realistische Ausrückzeit basierend auf Fahrzeugtyp
+            const dispatchDelay = calculateDispatchDelay(v.vehicleType);
+
+            // Nach Ausrückzeit: Route berechnen und S3 melden
+            setTimeout(async () => {
+              try {
+                const route = await getRoute(
+                  { lat: startPosition[0], lng: startPosition[1] },
+                  { lat: newIncident.position[0], lng: newIncident.position[1] }
+                );
+
+                // Wechsle zu S3 wenn Route fertig
+                if (route) {
+                  setVehicles(prev => prev.map(vehicle =>
+                    vehicle.id === vehicleId ? {
+                      ...vehicle,
+                      status: 'S3' as VehicleStatus,
+                      route: convertToLeafletFormat(route.coordinates),
+                      routeDuration: route.duration * 0.7
+                    } : vehicle
+                  ));
+                } else {
+                  // Fallback: Straight Line Route
+                  const straightRoute = getStraightLineRoute(
+                    { lat: startPosition[0], lng: startPosition[1] },
+                    { lat: newIncident.position[0], lng: newIncident.position[1] }
+                  );
+                  const straightDistance = calculateDistance(
+                    { lat: startPosition[0], lng: startPosition[1] },
+                    { lat: newIncident.position[0], lng: newIncident.position[1] }
+                  );
+                  setVehicles(prev => prev.map(vehicle =>
+                    vehicle.id === vehicleId ? {
+                      ...vehicle,
+                      status: 'S3' as VehicleStatus,
+                      route: straightRoute,
+                      routeDuration: Math.max(60, straightDistance / 20)
+                    } : vehicle
+                  ));
+                }
+
+                // ⚡ FUNKSPRUCH: S2 → S3 (Anfahrt beginnt)
+                setTimeout(() => {
+                  addRadioMessage(vehicleId, 'S2' as VehicleStatus, 'S3' as VehicleStatus, {
+                    incidentType: newIncident.type,
+                    location: newIncident.locationName,
+                  });
+                }, 200);
+
+              } catch {
+                // Fehlerfall: Straight Line Route
+                const straightRoute = getStraightLineRoute(
+                  { lat: startPosition[0], lng: startPosition[1] },
+                  { lat: newIncident.position[0], lng: newIncident.position[1] }
+                );
+                const straightDistance = calculateDistance(
+                  { lat: startPosition[0], lng: startPosition[1] },
+                  { lat: newIncident.position[0], lng: newIncident.position[1] }
+                );
+                setVehicles(prev => prev.map(vehicle =>
+                  vehicle.id === vehicleId ? {
+                    ...vehicle,
+                    status: 'S3' as VehicleStatus,
+                    route: straightRoute,
+                    routeDuration: Math.max(60, straightDistance / 20)
+                  } : vehicle
+                ));
+
+                // ⚡ FUNKSPRUCH: S2 → S3 (Anfahrt beginnt)
+                setTimeout(() => {
+                  addRadioMessage(vehicleId, 'S2' as VehicleStatus, 'S3' as VehicleStatus, {
+                    incidentType: newIncident.type,
+                    location: newIncident.locationName,
+                  });
+                }, 200);
+              }
+            }, dispatchDelay * 1000); // Nutze realistische Ausrückzeit
+
+          } else {
+            // 🚔 Normale Fahrzeuge: Direkte Alarmierung
+            // Berechne realistische Ausrückzeit basierend auf Fahrzeugtyp
+            const dispatchDelay = calculateDispatchDelay(v.vehicleType);
+
+            setTimeout(async () => {
+              try {
+                const route = await getRoute(
+                  { lat: startPosition[0], lng: startPosition[1] },
+                  { lat: newIncident.position[0], lng: newIncident.position[1] }
+                );
+
+                // Wechsle zu S3 wenn Route fertig
+                if (route) {
+                  setVehicles(prev => prev.map(vehicle =>
+                    vehicle.id === vehicleId ? {
+                      ...vehicle,
+                      status: 'S3' as VehicleStatus,
+                      route: convertToLeafletFormat(route.coordinates),
+                      routeDuration: route.duration * 0.7
+                    } : vehicle
+                  ));
+                } else {
+                  // Fallback: Straight Line Route
+                  const straightRoute = getStraightLineRoute(
+                    { lat: startPosition[0], lng: startPosition[1] },
+                    { lat: newIncident.position[0], lng: newIncident.position[1] }
+                  );
+                  const straightDistance = calculateDistance(
+                    { lat: startPosition[0], lng: startPosition[1] },
+                    { lat: newIncident.position[0], lng: newIncident.position[1] }
+                  );
+                  setVehicles(prev => prev.map(vehicle =>
+                    vehicle.id === vehicleId ? {
+                      ...vehicle,
+                      status: 'S3' as VehicleStatus,
+                      route: straightRoute,
+                      routeDuration: Math.max(60, straightDistance / 20)
+                    } : vehicle
+                  ));
+                }
+
+                // ⚡ FUNKSPRUCH: S2 → S3 (Anfahrt) - wie bei LST SIM
+                setTimeout(() => {
+                  addRadioMessage(vehicleId, 'S2' as VehicleStatus, 'S3' as VehicleStatus, {
+                    incidentType: newIncident.type,
+                    location: newIncident.locationName,
+                  });
+                }, 200);
+
+              } catch {
+                // Fehlerfall: Straight Line Route
+                const straightRoute = getStraightLineRoute(
+                  { lat: startPosition[0], lng: startPosition[1] },
+                  { lat: newIncident.position[0], lng: newIncident.position[1] }
+                );
+                const straightDistance = calculateDistance(
+                  { lat: startPosition[0], lng: startPosition[1] },
+                  { lat: newIncident.position[0], lng: newIncident.position[1] }
+                );
+                setVehicles(prev => prev.map(vehicle =>
+                  vehicle.id === vehicleId ? {
+                    ...vehicle,
+                    status: 'S3' as VehicleStatus,
+                    route: straightRoute,
+                    routeDuration: Math.max(60, straightDistance / 20)
+                  } : vehicle
+                ));
+
+                // ⚡ FUNKSPRUCH: S2 → S3 (Anfahrt) - wie bei LST SIM
+                setTimeout(() => {
+                  addRadioMessage(vehicleId, 'S2' as VehicleStatus, 'S3' as VehicleStatus, {
+                    incidentType: newIncident.type,
+                    location: newIncident.locationName,
+                  });
+                }, 200);
+              }
+            }, dispatchDelay * 1000); // Nutze realistische Ausrückzeit
+          }
+
+          addLog(`S-${vehicleId.toString().padStart(2, '0')} S1→S2 Einsatz #${newIncidentId}`, 'assignment');
+          soundManager.playSirenBeep();
+
+          return updatedVehicle;
+        });
+      });
+    }
+
+    // Markiere Call als "answered" und entferne nach kurzer Verzögerung
+    setCalls(prev => prev.map(c =>
+      c.id === callId ? { ...c, status: 'answered' as const, answered: true } : c
+    ));
+
+    // Entferne angenommene Anrufe nach 2 Sekunden
+    setTimeout(() => {
+      setCalls(prev => prev.filter(c => c.id !== callId));
+    }, 2000);
+
+    soundManager.playSirenBeep();
+    const vehicleInfo = preAssignedVehicles && preAssignedVehicles.length > 0
+      ? ` + ${preAssignedVehicles.length} Fahrzeuge zugewiesen`
+      : '';
+    addLog(`Anruf entgegengenommen: ${call.type} in ${call.locationName} → Einsatz #${newIncidentId}${vehicleInfo}`, 'assignment');
+  };
+
+  // BUGFIX: generateIncident jetzt direkt als generateCall (lstsim.de Style)
+  const generateIncident = () => {
+    generateCall(); // Nutze Call-System wie lstsim.de
+  };
+
+  // Request backup - öffnet Modal zur Fahrzeugauswahl
+  const requestBackup = (incidentId: number) => {
+    const incident = getIncidentById(incidents, incidentId);
+    if (!incident) return;
+
+    setSelectedIncidentForBackup(incident);
+    setIsBackupModalOpen(true);
+    soundManager.playSirenBeep();
+  };
+
+  // Confirm backup - weist ausgewählte Fahrzeuge zu
+  const confirmBackup = (vehicleIds: number[], withSpecialRights: boolean = true) => {
+    if (!selectedIncidentForBackup || vehicleIds.length === 0) return;
+
+    const incidentId = selectedIncidentForBackup.id;
+
+    addLog(`Verstärkung: ${vehicleIds.length} Fahrzeug(e) zu ${selectedIncidentForBackup.type}${withSpecialRights ? ' (MIT Sonderrechten)' : ' (OHNE Sonderrechte)'}`, 'assignment');
+    soundManager.playSirenBeep();
+
+    // Erhöhe required vehicles und gib Bonus-Zeit für Verstärkung
+    setIncidents(prev =>
+      prev.map(i =>
+        i.id === incidentId
+          ? {
+              ...i,
+              requiredVehicles: i.requiredVehicles + vehicleIds.length,
+              timeRemaining: i.timeRemaining + (vehicleIds.length * 12), // Angepasst an kürzere Dispatch-Zeiten
+              withSpecialRights: withSpecialRights, // Setze Sonderrechte
+            }
+          : i
+      )
+    );
+
+    // Weise alle ausgewählten Fahrzeuge zu
+    vehicleIds.forEach(vehicleId => {
+      assignVehicle(vehicleId, incidentId);
+    });
+
+    // Schließe Modal und reset state
+    setIsBackupModalOpen(false);
+    setSelectedIncidentForBackup(null);
+  };
+
+  // Return vehicle to station (für Hotkey H)
+  const returnToStation = async (vehicleId: number) => {
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    if (!vehicle) return;
+
+    const station = policeStations.find(s => s.id === vehicle.stationId);
+    if (!station) return;
+
+    // Berechne Route zur Wache
+    try {
+      // ZENTRALISIERT: Route-Berechnung zur Wache mit neuem Helper
+      const isHelicopter = usesAirRoute(vehicle.vehicleType);
+      const routeData = await calculateRoute(
+        { lat: vehicle.position[0], lng: vehicle.position[1] },
+        { lat: station.position[0], lng: station.position[1] },
+        isHelicopter
+      );
+
+      const route = routeData.path;
+      const routeDistance = routeData.distance;
+
+      // ⚡ REALISTISCHE GESCHWINDIGKEITSBERECHNUNG (Rückfahrt ohne Sonderrechte)
+      const routeDuration = calculateRealisticRouteDuration(
+        vehicle.vehicleType,
+        routeDistance,
+        weather.current,
+        vehicle.crewFatigue,
+        false // Rückfahrt ohne Blaulicht
+      );
+
+      setVehicles(prev => prev.map(v =>
+        v.id === vehicleId ? {
+          ...v,
+          status: 'S8' as VehicleStatus,
+          route,
+          routeDuration,
+          routeStartTime: Date.now(),
+          routeProgress: 0,
+          accumulatedTime: 0,
+          processingStartTime: null,
+          speakRequest: null,
+        } : v
+      ));
+
+      addRadioMessage(vehicleId, 'S4', 'S8', {
+        location: station.name,
+      });
+    } catch (error) {
+      console.error('Fehler bei returnToStation:', error);
+    }
+  };
+
+  // Neue Hilfsfunktion: Weise Fahrzeug direkt zu einem Incident-Objekt zu (verhindert Closure-Probleme)
+
+  // KRITISCHER FIX: Assign vehicle to incident (mit Error Handling für OSRM + lstsim.de S8-Umleitung)
+  // Nutzt functional state updates um Stale Closures zu vermeiden
+  const assignVehicle = async (vehicleId: number, incidentId: number) => {
+    // WICHTIG: Holen State über functional updates, nicht über Closures!
+    let vehicle: Vehicle | undefined;
+    let incident: Incident | undefined;
+
+    // Aktuellen State abrufen durch functional update
+    setVehicles(prev => {
+      vehicle = prev.find(v => v.id === vehicleId);
+      return prev; // Keine Änderung, nur State lesen
+    });
+
+    setIncidents(prev => {
+      incident = prev.find(i => i.id === incidentId);
+      return prev; // Keine Änderung, nur State lesen
+    });
+
+    // Validierung mit aktuellem State
+    if (!vehicle || !incident) {
+      console.warn(`AssignVehicle: Vehicle ${vehicleId} oder Incident ${incidentId} nicht gefunden`);
+      return;
+    }
+
+    // FMS-konform: S2 (Frei auf Wache) oder S8 (Rückfahrt, kann umgeleitet werden)
+    const canAssign = isVehicleAvailable(vehicle);
+
+    if (!canAssign || incident.assignedVehicleIds.includes(vehicleId)) {
+      return;
+    }
+
+    // ⚡ WETTER-CHECK: Helicopter kann bei schlechtem Wetter nicht fliegen
+    if (vehicle.vehicleType === 'Polizeihubschrauber' && !canHelicopterFly(weather.current)) {
+      const weatherName = weatherConditions[weather.current].name;
+      addLog(`⚠️ Hubschrauber ${vehicleId} kann bei ${weatherName} nicht fliegen!`, 'system');
+      setToasts((prev) => [
+        ...prev,
+        {
+          id: toastCounter,
+          type: 'Helicopter grounded',
+          location: `Bei ${weatherName} kann der Polizeihubschrauber nicht fliegen`,
+          priority: 'high',
+          incidentId: incidentId,
+        },
+      ]);
+      setToastCounter((c) => c + 1);
+      return; // Verhindere Zuweisung
+    }
+
+
+
+    // KRITISCHER FIX: Wenn Fahrzeug in S8 ist, von altem Einsatz entfernen
+    // UND arrivedVehicles dekrementieren (war vorher Bug: Counter desynchronisierte)
+    if (vehicle!.status === 'S8' && vehicle!.assignedIncidentId) {
+      setIncidents(prev =>
+        prev.map(i => {
+          if (i.id === vehicle!.assignedIncidentId) {
+            // Prüfe ob Fahrzeug bereits am Einsatzort war (Status war S4)
+            const wasAtScene = vehicle!.status === 'S8'; // S8 bedeutet: war in S4, jetzt auf Rückweg
+
+            return {
+              ...i,
+              assignedVehicleIds: i.assignedVehicleIds.filter(vid => vid !== vehicleId),
+              // Dekrementiere arrivedVehicles nur wenn Fahrzeug wirklich vor Ort war
+              arrivedVehicles: wasAtScene && i.arrivedVehicles > 0 ? i.arrivedVehicles - 1 : i.arrivedVehicles,
+            };
+          }
+          return i;
+        })
+      );
+      addLog(`S-${vehicleId.toString().padStart(2, '0')} S8→S3 Umgeleitet zu neuem Einsatz`, 'assignment');
+    }
+
+    const station = policeStations.find(s => s.id === vehicle!.stationId);
+    if (!station) return;
+
+    // Bestimme Startposition: Immer von Wache für S2, sonst aktuelle Position (S8 ist bereits unterwegs)
+    // WICHTIG: Für S2 IMMER station.position nutzen, nicht vehicle.position!
+    const startPosition = vehicle!.status === 'S2' ? station.position : vehicle!.position;
+
+    // ⏱️ REALISTISCHE AUSRÜCKZEIT: Berechne Verzögerung basierend auf Fahrzeugtyp
+    const dispatchDelay = calculateDispatchDelay(vehicle!.vehicleType);
+
+    // 🔒 BUG FIX #3: Cleanup existing timeout if vehicle is being reassigned
+    setVehicles(prev =>
+      prev.map(v => {
+        if (v.id === vehicleId && v.activeDispatchTimeout) {
+          clearTimeout(v.activeDispatchTimeout);
+        }
+        return v;
+      })
+    );
+
+    // Warte realistische Ausrückzeit (15-90s je nach Fahrzeugtyp), dann Route berechnen und zu S3 wechseln
+    const timeoutId = setTimeout(async () => {
+      // Lokale Kopien für TypeScript (verhindert undefined-Fehler)
+      const safeVehicle = vehicle;
+      const safeIncident = incident;
+      const safeStartPosition = startPosition;
+
+      let route: [number, number][] | null = null;
+      let routeDuration = 240;
+      let routeDistance = 0;
+
+      try {
+        // ZENTRALISIERT: Route-Berechnung mit neuem Helper
+        const isHelicopter = usesAirRoute(safeVehicle!.vehicleType);
+        const routeData = await calculateRoute(
+          { lat: safeStartPosition![0], lng: safeStartPosition![1] },
+          { lat: safeIncident!.position[0], lng: safeIncident!.position[1] },
+          isHelicopter
+        );
+
+        route = routeData.path;
+        routeDistance = routeData.distance;
+
+        // ⚡ REALISTISCHE GESCHWINDIGKEITSBERECHNUNG
+        // Berücksichtigt: Fahrzeugtyp, maxSpeed, Wetter, Müdigkeit, Sonderrechte
+        routeDuration = calculateRealisticRouteDuration(
+          safeVehicle!.vehicleType,
+          routeDistance,
+          weather.current,
+          safeVehicle!.crewFatigue,
+          safeIncident!.priority === 'high' // Nur bei High-Priority mit Blaulicht
+        );
+      } catch (error) {
+        console.error('Routing Fehler:', error);
+
+        // 🔒 BUG FIX #2: Doppelter try-catch für absolut sicheren Fallback
+        try {
+          // KRITISCHER FALLBACK: Wenn Route-Berechnung komplett fehlschlägt, nutze Direktlinie
+          const straightRoute = [safeStartPosition!, safeIncident!.position];
+          route = straightRoute;
+          routeDistance = calculateDistance(
+            { lat: safeStartPosition![0], lng: safeStartPosition![1] },
+            { lat: safeIncident!.position[0], lng: safeIncident!.position[1] }
+          );
+          routeDuration = (routeDistance / 1000) * 60; // Schätzung: 1km pro Minute
+
+          addLog(`⚠️ Routing-Fallback: Direktroute für Fahrzeug ${vehicleId}`, 'system');
+        } catch (fallbackError) {
+          console.error('🔴 KRITISCH: Auch Fallback-Route fehlgeschlagen:', fallbackError);
+          // LETZTE RETTUNG: Minimale 2-Punkt-Route (Frankfurt Zentrum)
+          route = [
+            safeStartPosition || [50.1109, 8.6821],
+            safeIncident?.position || [50.1109, 8.6821]
+          ];
+          routeDuration = 120; // 2 Minuten Default
+          routeDistance = 2000; // 2km Default
+          addLog(`🔴 KRITISCH: Notfall-Route für Fahrzeug ${vehicleId}`, 'failed');
+        }
+      }
+
+      // Route fertig - wechsle zu S3 (Anfahrt)
+      // WICHTIG: Immer zu S3 wechseln, auch wenn nur Fallback-Route!
+      if (route && route.length >= 2) {
+        console.log(`[DISPATCH] Fahrzeug ${vehicleId} wechselt zu S3 mit Route (${route.length} Punkte)`);
+
+        setVehicles(prev => prev.map(v =>
+          v.id === vehicleId ? {
+            ...v,
+            status: 'S3' as VehicleStatus,
+            isPreparingToDepart: false, // Nicht mehr in Vorbereitung
+            route,  // Route ist bereits konvertiert!
+            routeDuration,
+            routeStartTime: Date.now(), // WICHTIG: Setze Start-Zeit neu!
+            accumulatedTime: 0, // WICHTIG: Reset accumulated time!
+            activeDispatchTimeout: undefined, // 🔒 BUG FIX #3: Clear timeout nach erfolgreicher Route
+          } : v
+        ));
+
+        // ⚡ FUNKSPRUCH: S2 → S3 (Ausgerückt)
+        addRadioMessage(vehicleId, 'S2', 'S3', {
+          incidentType: safeIncident!.type,
+          location: safeIncident!.locationName,
+        });
+
+        addLog(`S-${vehicleId.toString().padStart(2, '0')} S2→S3 Ausgerückt zu Einsatz #${incidentId} ${safeIncident!.type} (${dispatchDelay}s)`, 'assignment');
+      } else {
+        console.error(`[DISPATCH ERROR] Fahrzeug ${vehicleId} hat keine gültige Route! Route:`, route);
+        addLog(`⚠️ FEHLER: Fahrzeug ${vehicleId} konnte nicht ausrücken (keine Route)`, 'failed');
+      }
+    }, dispatchDelay * 1000); // Realistische Ausrückzeit in Millisekunden
+
+    // 🔒 BUG FIX #1 & #3: Markiere Fahrzeug SOFORT als nicht verfügbar + Speichere Timeout-ID
+    setVehicles(prev =>
+      prev.map(v =>
+        v.id === vehicleId ? {
+          ...v,
+          position: startPosition,  // WICHTIG: Setze Position explizit auf Startposition!
+          assignedIncidentId: incidentId,
+          status: 'S2' as VehicleStatus,
+          isAvailable: false, // 🔒 SOFORT als nicht verfügbar markieren!
+          dispatchTime: Date.now(), // Zeitpunkt der Alarmierung
+          isPreparingToDepart: true, // Bereitet Ausrückung vor
+          routeStartTime: Date.now(),
+          routeProgress: 0,
+          route: null,  // Wird async berechnet
+          accumulatedTime: 0,  // Reset für neue Fahrt
+          activeDispatchTimeout: timeoutId, // 🔒 BUG FIX #3: Speichere Timeout-ID
+        } : v
+      )
+    );
+
+    setIncidents(prev =>
+      prev.map(i =>
+        i.id === incidentId ? { ...i, assignedVehicleIds: [...i.assignedVehicleIds, vehicleId] } : i
+      )
+    );
+
+    soundManager.playSirenBeep();
+
+    // ⚡ FUNKSPRUCH: S8 → S3 (nur bei Umleitung von S8)
+    if (vehicle.status === 'S8') {
+      addRadioMessage(vehicleId, 'S8', 'S3', {
+        incidentType: incident.type,
+        location: incident.locationName,
+      });
+    }
+  };
+
+  // Vehicle movement animation and status management (Performance-Optimierung: nur wenn Fahrzeuge bewegt werden)
+  useEffect(() => {
+    if (!gameStarted || isPaused) return;
+
+    let animationFrameId: number;
+    let lastFrameTime = Date.now();
+
+    const animate = () => {
+      const currentFrameTime = Date.now();
+      const deltaTime = (currentFrameTime - lastFrameTime) / 1000; // in seconds
+      const scaledDeltaTime = deltaTime * gameSpeed; // Apply game speed multiplier
+      lastFrameTime = currentFrameTime;
+
+      // PERFORMANCE-OPTIMIERUNG: Nur animieren wenn Fahrzeuge tatsächlich unterwegs sind
+      // Verhindert unnötige Berechnungen wenn alle Fahrzeuge stehen
+      const hasMovingVehicles = vehicles.some(v => isVehicleMoving(v));
+      const hasProcessingVehicles = vehicles.some(v => v.status === 'S6' && v.outOfServiceUntil);
+
+      if (!hasMovingVehicles && !hasProcessingVehicles) {
+        // Keine Fahrzeuge in Bewegung oder S6-Wartung
+        // Prüfe nur alle 500ms statt jedes Frame für bessere Performance
+        setTimeout(() => {
+          animationFrameId = requestAnimationFrame(animate);
+        }, 500);
+        return;
+      }
+
+      setVehicles(prev =>
+        prev.map(vehicle => {
+          // S2: Frei auf Wache - no action needed
+          if (vehicle.status === 'S2') {
+            return vehicle;
+          }
+
+          // ⚡ S6: Außer Dienst (Tanken/Pause/Reparatur)
+          if (vehicle.status === 'S6' && vehicle.outOfServiceUntil) {
+            // Prüfe ob S6-Zeit vorbei ist
+            if (gameTime >= vehicle.outOfServiceUntil) {
+              // S6 → S2: Zurück im Dienst (an Wache)
+              const updates = resetVehicleAfterService(vehicle, vehicle.outOfServiceReason || 'unknown');
+
+              addLog(`S-${vehicle.id.toString().padStart(2, '0')} S6→S2 ${vehicle.outOfServiceReason} abgeschlossen`, 'completion');
+
+              return {
+                ...vehicle,
+                ...updates,
+                status: 'S2',
+                isAvailable: true,
+              };
+            }
+            // Noch in S6
+            return vehicle;
+          }
+
+          // S3: Anfahrt zum Einsatz
+          if (vehicle.status === 'S3' && vehicle.route) {
+            // Use accumulated elapsed time instead of Date.now()
+            const accumulatedTime = vehicle.accumulatedTime || 0;
+            const newAccumulatedTime = accumulatedTime + scaledDeltaTime;
+            const newProgress = Math.min(newAccumulatedTime / vehicle.routeDuration, 1);
+
+            if (newProgress >= 1) {
+              // Arrived at incident - change to S4
+              const incident = vehicle.assignedIncidentId ? getIncidentById(incidents, vehicle.assignedIncidentId) : undefined;
+
+              // 🔒 BUG FIX #6: Prüfe ob Einsatz noch existiert (kann während Anfahrt gelöscht worden sein)
+              if (!incident) {
+                console.warn(`⚠️ Fahrzeug ${vehicle.id}: Einsatz ${vehicle.assignedIncidentId} existiert nicht mehr`);
+                addLog(`⚠️ Fahrzeug ${vehicle.id}: Einsatz wurde abgebrochen, kehre zur Wache zurück`, 'system');
+
+                // Berechne Route zurück zur Wache
+                const station = policeStations.find(s => s.id === vehicle.stationId);
+                if (station) {
+                  // Wechsle direkt zu S8 (Rückfahrt)
+                  getRoute(
+                    { lat: vehicle.position[0], lng: vehicle.position[1] },
+                    { lat: station.position[0], lng: station.position[1] }
+                  ).then(osrmRoute => {
+                    let returnRoute: [number, number][] | null = null;
+                    let returnDuration = 240;
+
+                    if (osrmRoute) {
+                      returnRoute = convertToLeafletFormat(osrmRoute.coordinates);
+                      returnDuration = osrmRoute.duration * 0.7;
+                    } else {
+                      returnRoute = getStraightLineRoute(
+                        { lat: vehicle.position[0], lng: vehicle.position[1] },
+                        { lat: station.position[0], lng: station.position[1] }
+                      );
+                    }
+
+                    setVehicles(prevVehicles =>
+                      prevVehicles.map(v =>
+                        v.id === vehicle.id ? {
+                          ...v,
+                          status: 'S8' as VehicleStatus,
+                          route: returnRoute,
+                          routeDuration: returnDuration,
+                          routeStartTime: Date.now(),
+                          routeProgress: 0,
+                          accumulatedTime: 0,
+                          assignedIncidentId: null,
+                          canBeRedirected: true,
+                        } : v
+                      )
+                    );
+                  });
+                }
+                return vehicle; // Behalte aktuellen Status für diesen Frame
+              }
+
+              // 🔒 BUG FIX #4: Berechne Parking-Position mit mehreren Reihen für >8 Fahrzeuge
+              const incidentVehicles = prev.filter(v =>
+                v.assignedIncidentId === vehicle.assignedIncidentId && v.status === 'S4'
+              );
+              const parkingIndex = incidentVehicles.length; // Wieviele Fahrzeuge sind schon da?
+
+              // Mehrere Reihen: 8 Fahrzeuge pro Reihe (360° / 45° = 8)
+              const vehiclesPerRow = 8;
+              const row = Math.floor(parkingIndex / vehiclesPerRow); // Reihe (0, 1, 2, ...)
+              const posInRow = parkingIndex % vehiclesPerRow; // Position in Reihe (0-7)
+
+              // Erstelle einen kleinen Offset um den Einsatzort herum (in einem Halbkreis)
+              const incidentPos = vehicle.route[vehicle.route.length - 1];
+              const baseOffset = 0.0001; // ~11 Meter Basisabstand
+              const offsetDistance = baseOffset * (row + 1); // Größerer Abstand für weitere Reihen
+              const angleStep = Math.PI / 4; // 45 Grad zwischen Fahrzeugen
+              const angle = -Math.PI / 2 + (posInRow * angleStep); // Startwinkel -90° (oben)
+
+              const parkedPosition: [number, number] = [
+                incidentPos[0] + (Math.sin(angle) * offsetDistance),
+                incidentPos[1] + (Math.cos(angle) * offsetDistance)
+              ];
+
+              setIncidents(prevIncidents =>
+                prevIncidents.map(inc => {
+                  if (inc.id === vehicle.assignedIncidentId) {
+                    // ⚡ ERSTMELDUNG SOFORT bei erster Ankunft (LST-SIM Style)
+                    const isFirstArrival = inc.arrivedVehicles === 0 && !inc.initialReportGiven;
+
+                    if (isFirstArrival && incident) {
+                      const report = incidentReports[incident.type];
+                      if (report) {
+                        // ERSTMELDUNG - Sofort nach Ankunft
+                        const initialMsg = getRandomReport(report.initialReport);
+                        addRadioMessage(vehicle.id, 'S3', 'S4', {
+                          customMessage: initialMsg,
+                          requiresResponse: false,
+                        });
+                        addLog(`${vehicle.callsign}: ${initialMsg}`, 'radio');
+
+                        // Prüfe ob Verstärkung benötigt wird
+                        const backupReq = report.backupRequest;
+                        if (backupReq) {
+                          // ⭐ UX #1: Audio-Feedback bei Verstärkungsanforderung
+                          soundManager.playBackupWarning();
+
+                          return {
+                            ...inc,
+                            arrivedVehicles: inc.arrivedVehicles + 1,
+                            initialReportGiven: true,
+                            backupRequested: true,
+                            backupFulfilled: false,
+                            backupVehiclesNeeded: backupReq.additionalVehicles,
+                            requiredVehicles: inc.requiredVehicles + backupReq.additionalVehicles, // Erhöhe Bedarf
+                          };
+                        }
+                      }
+                    }
+
+                    return { ...inc, arrivedVehicles: inc.arrivedVehicles + 1, initialReportGiven: isFirstArrival };
+                  }
+                  return inc;
+                })
+              );
+
+              // OPTIMIERUNG 2: Protocol-Log detaillierter (lstsim.de Style)
+              addLog(`S-${vehicle.id.toString().padStart(2, '0')} S3→S4 Einsatzort erreicht`, 'arrival');
+
+              // ⭐ UX #1: Audio-Feedback bei Ankunft
+              soundManager.playArrivalSound();
+
+              return {
+                ...vehicle,
+                position: parkedPosition, // Geparkte Position mit Offset
+                status: 'S4', // Am Einsatzort
+                processingStartTime: Date.now(),
+                processingDuration: incident?.processingDuration || 180,
+                routeProgress: 1,
+                situationReportSent: false, // Reset für Lagemeldung
+              };
+            }
+
+            const { position: newPosition, bearing: newBearing } = getPointAlongRoute(vehicle.route, newProgress);
+
+            // Sprechwünsche nur noch während S4 (am Einsatzort)
+
+            return {
+              ...vehicle,
+              position: newPosition,
+              routeProgress: newProgress,
+              bearing: newBearing,
+              accumulatedTime: newAccumulatedTime,
+            };
+          }
+
+          // S5: Sprechwunsch - Fahrzeug pausiert und wartet auf Bestätigung
+          if (vehicle.status === 'S5') {
+            // Fahrzeug bleibt stehen bis Sprechwunsch bestätigt wird
+            // Nach Bestätigung kehrt es zum previousStatus zurück (S3, S4 oder S8)
+            return vehicle;
+          }
+
+          // S4: Am Einsatzort - wait for processing to complete
+          if (vehicle.status === 'S4' && vehicle.processingStartTime) {
+            // Processing is handled in separate useEffect
+            return vehicle;
+          }
+
+          // S7: Fahrt zur Tankstelle / Tanken
+          if (vehicle.status === 'S7' && vehicle.route) {
+            const accumulatedTime = vehicle.accumulatedTime || 0;
+            const newAccumulatedTime = accumulatedTime + scaledDeltaTime;
+            const newProgress = Math.min(newAccumulatedTime / vehicle.routeDuration, 1);
+
+            if (newProgress >= 1) {
+              // Angekommen an Tankstelle → Tanken
+              const tankCapacity = vehicleTypeConfigs[vehicle.vehicleType].tankCapacity;
+              const refuelDuration = calculateRefuelDuration(vehicle.fuelLevel, tankCapacity);
+
+              addLog(`⛽ Fahrzeug ${vehicle.id} tankt (Dauer: ${refuelDuration}s)`, 'system');
+
+              // Setze Fahrzeug zu S6 mit Grund "Tanken"
+              return {
+                ...vehicle,
+                status: 'S6',
+                outOfServiceReason: 'Tanken',
+                outOfServiceUntil: gameTime + refuelDuration,
+                route: null,
+                routeProgress: 0,
+                accumulatedTime: 0,
+              };
+            }
+
+            // Fahrzeug ist noch unterwegs zur Tankstelle
+            const { position: newPosition, bearing: newBearing } = getPointAlongRoute(vehicle.route, newProgress);
+
+            return {
+              ...vehicle,
+              position: newPosition,
+              routeProgress: newProgress,
+              bearing: newBearing,
+              accumulatedTime: newAccumulatedTime,
+            };
+          }
+
+          // S8: Rückfahrt zur Wache
+          if (vehicle.status === 'S8' && vehicle.route) {
+            // Use accumulated elapsed time instead of Date.now()
+            const accumulatedTime = vehicle.accumulatedTime || 0;
+            const newAccumulatedTime = accumulatedTime + scaledDeltaTime;
+            const newProgress = Math.min(newAccumulatedTime / vehicle.routeDuration, 1);
+
+            if (newProgress >= 1) {
+              // Arrived at station - change to S1
+              const station = policeStations.find(s => s.id === vehicle.stationId);
+
+              const routeDistance = vehicle.route?.length
+                ? vehicle.route.reduce((total, point, index) => {
+                    if (index === 0) return 0;
+                    const prev = vehicle.route![index - 1];
+                    return total + calculateDistance(
+                      { lat: prev[0], lng: prev[1] },
+                      { lat: point[0], lng: point[1] }
+                    );
+                  }, 0)
+                : 0;
+
+              // OPTIMIERUNG 2: Protocol-Log detaillierter (lstsim.de Style)
+              addLog(`S-${vehicle.id.toString().padStart(2, '0')} S8→S2 An Wache`, 'completion');
+
+              // ⚡ FUNKSPRUCH: S8 → S2 (Ankunft an Wache, wieder einsatzbereit)
+              addRadioMessage(vehicle.id, 'S8', 'S2', {
+                location: station?.name,
+              });
+
+              // ⚡ REALISTISCHE TIMINGS: Verbrauch berechnen
+              const distanceKm = routeDistance / 1000; // Meter → Kilometer
+              const fuelConsumed = calculateFuelConsumption(vehicle, distanceKm);
+              const timeDrivenHours = vehicle.routeDuration / 3600; // Sekunden → Stunden
+              const fatigueGained = calculateCrewFatigue(vehicle, timeDrivenHours);
+              const newFuelLevel = Math.max(0, vehicle.fuelLevel - fuelConsumed);
+              const newFatigue = Math.min(100, vehicle.crewFatigue + fatigueGained);
+              const newMaintenance = updateMaintenanceStatus(vehicle, distanceKm);
+
+              // Prüfe ob Fahrzeug zu S6 muss (Tanken/Pause/Reparatur)
+              const updatedVehicle = {
+                ...vehicle,
+                fuelLevel: newFuelLevel,
+                crewFatigue: newFatigue,
+                maintenanceStatus: newMaintenance,
+                totalDistanceTraveled: vehicle.totalDistanceTraveled + routeDistance,
+              };
+
+              const s6Reason = determineOutOfServiceReason(updatedVehicle);
+              const shouldGoS6 = s6Reason !== null;
+
+              // NEU: Prüfe ob Fahrzeug tanken muss (S7)
+              if (shouldRefuel(updatedVehicle) && !shouldGoS6) {
+                const nearestGasStation = findNearestGasStation(station ? station.position : vehicle.position, gasStations);
+
+                if (nearestGasStation) {
+                  // Fahrzeug muss tanken → Route zur Tankstelle (S7)
+                  addLog(`⛽ Fahrzeug ${vehicle.id} muss tanken (${updatedVehicle.fuelLevel.toFixed(0)}%) → ${nearestGasStation.name}`, 'system');
+
+                  // Berechne Route zur Tankstelle
+                  const startPos = station ? station.position : vehicle.position;
+                  const straightRoute = getStraightLineRoute(
+                    { lat: startPos[0], lng: startPos[1] },
+                    { lat: nearestGasStation.position[0], lng: nearestGasStation.position[1] }
+                  );
+                  const routeToGasStation = convertToLeafletFormat(straightRoute);
+                  const distanceToGasStation = calculateDistance(
+                    { lat: (station ? station.position : vehicle.position)[0], lng: (station ? station.position : vehicle.position)[1] },
+                    { lat: nearestGasStation.position[0], lng: nearestGasStation.position[1] }
+                  );
+                  // ⚡ REALISTISCHE GESCHWINDIGKEITSBERECHNUNG (Fahrt zur Tankstelle ohne Eile)
+                  const durationToGasStation = calculateRealisticRouteDuration(
+                    vehicle.vehicleType,
+                    distanceToGasStation,
+                    weather.current,
+                    updatedVehicle.crewFatigue,
+                    false // Keine Sonderrechte beim Tanken
+                  );
+
+                  return {
+                    ...updatedVehicle,
+                    position: station ? station.position : vehicle.position,
+                    assignedIncidentId: null,
+                    routeIndex: 0,
+                    route: routeToGasStation,
+                    routeProgress: 0,
+                    bearing: 0,
+                    routeDuration: durationToGasStation,
+                    routeStartTime: Date.now(),
+                    status: 'S7',
+                    processingStartTime: null,
+                    processingDuration: 0,
+                    accumulatedTime: 0,
+                  };
+                }
+              }
+
+              return {
+                ...updatedVehicle,
+                position: station ? station.position : vehicle.position,
+                assignedIncidentId: null,
+                routeIndex: 0,
+                route: null,
+                routeProgress: 0,
+                bearing: 0,
+                routeDuration: 0,
+                routeStartTime: 0,
+                status: shouldGoS6 ? 'S6' : 'S2',
+                processingStartTime: null,
+                processingDuration: 0,
+                outOfServiceReason: shouldGoS6 ? s6Reason : null,
+                outOfServiceUntil: shouldGoS6 ? calculateOutOfServiceDuration(s6Reason!, gameTime) : null,
+              };
+            }
+
+            const { position: newPosition, bearing: newBearing } = getPointAlongRoute(vehicle.route, newProgress);
+
+            // Sprechwünsche nur noch während S4 (am Einsatzort)
+
+            return {
+              ...vehicle,
+              position: newPosition,
+              routeProgress: newProgress,
+              bearing: newBearing,
+              accumulatedTime: newAccumulatedTime,
+            };
+          }
+
+          return vehicle;
+        })
+      );
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    // Starte Animation
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [gameStarted, isPaused, gameSpeed, incidents, vehicles]);
+
+  // Handle S4 processing and transition to S8 (Optimierung: nur wenn Fahrzeuge am Einsatzort sind)
+  useEffect(() => {
+    if (!gameStarted) return;
+
+    // Performance-Check: Nur laufen wenn Fahrzeuge Status S4 haben
+    const hasProcessingVehicles = vehicles.some(v => v.status === 'S4');
+    if (!hasProcessingVehicles) return;
+
+    const interval = setInterval(() => {
+      setVehicles(prev =>
+        prev.map(vehicle => {
+          if (vehicle.status === 'S4' && vehicle.processingStartTime) {
+            const currentTime = Date.now();
+            const processingElapsed = (currentTime - vehicle.processingStartTime) / 1000;
+
+            // ⚡ RÜCKMELDUNGS-SYSTEM: Lagemeldung nach 10-20 Sekunden (LST-SIM Style)
+            if (!vehicle.situationReportSent && processingElapsed >= 10 && processingElapsed <= 20) {
+              const incident = vehicle.assignedIncidentId ? getIncidentById(incidents, vehicle.assignedIncidentId) : undefined;
+              if (incident) {
+                // Generiere realistische Lagemeldung
+                const situationReports = [
+                  `Lage vor Ort bestätigt. ${incident.type}. Maßnahmen werden eingeleitet.`,
+                  `Einsatzort erreicht. Situation wie gemeldet. Beginne mit Maßnahmen.`,
+                  `Am Einsatzort. ${incident.type} bestätigt. Benötige ca. ${Math.ceil(vehicle.processingDuration / 60)} Minuten.`,
+                  `Vor Ort. Lage entspricht Meldung. Weitere Updates folgen.`,
+                ];
+                const report = situationReports[Math.floor(Math.random() * situationReports.length)];
+
+                addRadioMessage(vehicle.id, 'S4', 'S4', {
+                  customMessage: report,
+                  requiresResponse: false,
+                });
+
+                return { ...vehicle, situationReportSent: true };
+              }
+            }
+
+            // ⚡ SPRECHWUNSCH-SYSTEM (S5): Nur EINE Einheit pro Einsatz darf Sprechwunsch abgeben
+            // 🔒 BUG FIX #5: Erhöhte Chance und erweitertes Zeitfenster
+            const currentIncident = vehicle.assignedIncidentId ? getIncidentById(incidents, vehicle.assignedIncidentId) : undefined;
+            const processingProgress = processingElapsed / vehicle.processingDuration;
+            if (
+              currentIncident &&
+              !currentIncident.speakRequestGiven && // Noch kein Sprechwunsch für diesen Einsatz
+              processingProgress > 0.2 && // Früheres Zeitfenster: 20% statt 30%
+              processingProgress < 0.7 && // Längeres Zeitfenster: 70% statt 60%
+              !vehicle.speakRequest &&
+              Math.random() < 0.025 // 🔒 Höhere Chance: 2.5% statt 1.2% (Ø nach 40s statt 83s)
+            ) {
+              // Bestimme Typ des Sprechwunsches basierend auf Situation
+              let requestType: 'situation_report' | 'escalation' | 'backup_needed' | 'suspect_arrested' | 'additional_info' | 'unclear_situation';
+
+              // Wenn Fahrzeuge fehlen -> Verstärkung
+              if (currentIncident.arrivedVehicles < currentIncident.requiredVehicles) {
+                requestType = Math.random() < 0.6 ? 'backup_needed' : 'escalation';
+              }
+              // Bei High Priority -> häufiger Eskalation oder Verstärkung
+              else if (currentIncident.priority === 'high') {
+                const rand = Math.random();
+                if (rand < 0.3) requestType = 'escalation';
+                else if (rand < 0.5) requestType = 'suspect_arrested';
+                else if (rand < 0.7) requestType = 'situation_report';
+                else requestType = 'additional_info';
+              }
+              // Normale Situationsberichte
+              else {
+                const rand = Math.random();
+                if (rand < 0.4) requestType = 'situation_report';
+                else if (rand < 0.6) requestType = 'unclear_situation';
+                else if (rand < 0.8) requestType = 'additional_info';
+                else requestType = 'suspect_arrested';
+              }
+
+              const reason = requestType === 'escalation' || requestType === 'backup_needed' ? 'backup' :
+                            requestType === 'suspect_arrested' ? 'suspect_arrested' :
+                            requestType === 'unclear_situation' ? 'unclear_situation' : 'additional_info';
+              const message = speakRequestMessages[reason];
+
+              // Markiere Incident als "Sprechwunsch gegeben"
+              setIncidents(prev => prev.map(inc =>
+                inc.id === currentIncident.id
+                  ? { ...inc, speakRequestGiven: true }
+                  : inc
+              ));
+
+              setVehicles(prevVehicles =>
+                prevVehicles.map(v =>
+                  v.id === vehicle.id
+                    ? {
+                        ...v,
+                        status: 'S5' as VehicleStatus,
+                        speakRequest: message,
+                        speakRequestType: requestType,
+                        previousStatus: 'S4', // Merke vorherigen Status
+                      }
+                    : v
+                )
+              );
+
+              addLog(`S-${vehicle.id.toString().padStart(2, '0')} S4→S5 Sprechwunsch`, 'assignment');
+
+              // ⭐ UX #1: Unterschiedliche Sounds je nach Sprechwunsch-Typ
+              if (requestType === 'backup_needed' || requestType === 'escalation') {
+                soundManager.playUrgentSpeakRequest(); // Dringender Sound
+              } else {
+                soundManager.playAlertSound(); // Normaler Sound
+              }
+
+              return vehicle; // Behalte alten Status für diesen Frame
+            }
+
+            if (processingElapsed >= vehicle.processingDuration) {
+              // Check if all required vehicles have arrived and processed
+              const incident = vehicle.assignedIncidentId ? getIncidentById(incidents, vehicle.assignedIncidentId) : undefined;
+              if (incident && incident.arrivedVehicles >= incident.requiredVehicles) {
+                // All vehicles ready - start return trip
+                const station = policeStations.find(s => s.id === vehicle.stationId);
+                if (!station) return vehicle;
+
+                // Get route back to station
+                getRoute(
+                  { lat: vehicle.position[0], lng: vehicle.position[1] },
+                  { lat: station.position[0], lng: station.position[1] }
+                ).then(osrmRoute => {
+                  let returnRoute: [number, number][] | null = null;
+                  let returnDuration = 240;
+
+                  if (osrmRoute) {
+                    returnRoute = convertToLeafletFormat(osrmRoute.coordinates);
+                    returnDuration = osrmRoute.duration * 0.7;
+                  } else {
+                    returnRoute = getStraightLineRoute(
+                      { lat: vehicle.position[0], lng: vehicle.position[1] },
+                      { lat: station.position[0], lng: station.position[1] }
+                    );
+                    const returnDistance = calculateDistance(
+                      { lat: vehicle.position[0], lng: vehicle.position[1] },
+                      { lat: station.position[0], lng: station.position[1] }
+                    );
+                    returnDuration = Math.max(60, returnDistance / 20);
+                  }
+
+                  setVehicles(prevVehicles =>
+                    prevVehicles.map(v =>
+                      v.id === vehicle.id
+                        ? {
+                            ...v,
+                            status: 'S8', // Rückfahrt zur Wache
+                            route: returnRoute,
+                            routeProgress: 0,
+                            routeStartTime: Date.now(),
+                            routeDuration: returnDuration,
+                            accumulatedTime: 0,  // Reset für Rückfahrt
+                          }
+                        : v
+                    )
+                  );
+
+                  // OPTIMIERUNG 2: Protocol-Log detaillierter (lstsim.de Style)
+                  addLog(`S-${vehicle.id.toString().padStart(2, '0')} S4→S8 Rückkehr zur Wache`, 'completion');
+
+                  // ⭐ UX #1: Audio-Feedback bei Einsatz-Abschluss
+                  soundManager.playCompletionSound();
+
+                  // ⚡ FUNKSPRUCH: S4 → S8 (Einsatz beendet, Rückkehr)
+                  addRadioMessage(vehicle.id, 'S4', 'S8', {
+                    location: station?.name,
+                  });
+                });
+              }
+
+              return vehicle;
+            }
+          }
+
+          return vehicle;
+        })
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameStarted, incidents, vehicles]);
+
+  // Eskalations-System (Optimierung: nur wenn eskalationsfähige Einsätze vorhanden sind)
+  useEffect(() => {
+    if (!gameStarted) return;
+
+    // Performance-Check: Nur laufen wenn eskalationsfähige Einsätze vorhanden sind
+    const hasEscalatableIncidents = incidents.some(i => i.canEscalate && !i.hasEscalated);
+    if (!hasEscalatableIncidents) return;
+
+    const interval = setInterval(() => {
+      setIncidents(prev =>
+        prev.map(incident => {
+          // Prüfe ob Einsatz eskalieren soll
+          if (
+            incident.canEscalate &&
+            !incident.hasEscalated &&
+            incident.escalationTime &&
+            Date.now() >= incident.escalationTime &&
+            incident.assignedVehicleIds.length > 0 && // Nur wenn Fahrzeuge unterwegs
+            (vehicles.some(v => v.assignedIncidentId === incident.id && (v.status === 'S3' || v.status === 'S4')))
+          ) {
+            const escalation = escalationRules[incident.type];
+            if (escalation) {
+              const newType = escalation.newType;
+              const newPriority = escalation.newPriority;
+              const escalatedIncidentType = incidentTypes.find(it => it.type === newType);
+
+              if (escalatedIncidentType) {
+                // Eskalations-Benachrichtigung
+                soundManager.playAlertSound();
+                addLog(`⚠️ ESKALATION: ${incident.type} → ${newType} in ${incident.locationName}`, 'new');
+
+                setToasts((prevToasts) => [
+                  ...prevToasts,
+                  {
+                    id: toastCounter,
+                    type: `⚠️ ESKALATION: ${newType}`,
+                    location: incident.locationName,
+                    priority: newPriority,
+                    incidentId: incident.id,
+                  },
+                ]);
+                setToastCounter((prev) => prev + 1);
+
+                // Aktualisiere Einsatz
+                return {
+                  ...incident,
+                  type: newType,
+                  priority: newPriority,
+                  description: `${escalatedIncidentType.description} - ${incident.locationName}`,
+                  requiredVehicles: incident.requiredVehicles + 1,
+                  timeRemaining: incident.timeRemaining + 30,
+                  processingDuration: incidentProcessingTimes[newType] || incident.processingDuration,
+                  hasEscalated: true,
+                  canEscalate: false,
+                };
+              }
+            }
+          }
+
+          return incident;
+        })
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameStarted, vehicles, incidents]);
+
+  // Incident completion check (Optimierung: nur wenn aktive Einsätze vorhanden sind)
+  useEffect(() => {
+    if (!gameStarted || isPaused) return;
+
+    // Performance-Check: Nur laufen wenn Einsätze vorhanden sind
+    if (incidents.length === 0) return;
+
+    const interval = setInterval(() => {
+      setIncidents(prev => {
+        const updated = prev.map(incident => {
+          // Check if all required vehicles have arrived
+          if (incident.arrivedVehicles >= incident.requiredVehicles) {
+            // KRITISCHER BUGFIX (lstsim.de Style): Einsatz ist ERST abgeschlossen wenn ALLE Fahrzeuge in S8 sind!
+            const incidentVehicles = vehicles.filter(v => v.assignedIncidentId === incident.id);
+            const allReturning = incidentVehicles.every(v => v.status === 'S8');
+
+            if (allReturning && incidentVehicles.length > 0) {
+              // All vehicles are returning - complete incident
+              const responseTime = (Date.now() - incident.spawnTime) / 1000;
+              const points = incident.priority === 'high' ? 30 : incident.priority === 'medium' ? 20 : 10;
+              const bonus = incident.requiredVehicles > 1 ? incident.requiredVehicles * 10 : 0;
+
+              setScore(s => s + points + bonus);
+
+              setStatistics(prev => ({
+                ...prev,
+                totalResolved: prev.totalResolved + 1,
+                totalResponseTimes: [...prev.totalResponseTimes, responseTime],
+                incidentsByType: {
+                  ...prev.incidentsByType,
+                  [incident.type]: (prev.incidentsByType[incident.type] || 0) + 1,
+                },
+                currentStreak: prev.currentStreak + 1,
+                bestStreak: Math.max(prev.bestStreak, prev.currentStreak + 1),
+                totalDistance: prev.totalDistance + vehicles.reduce((sum, v) => sum + v.totalDistanceTraveled, 0),
+              }));
+
+              soundManager.playSuccessChime();
+              addLog(`Einsatz ${incident.type} in ${incident.locationName} erfolgreich abgeschlossen (+${points + bonus} Punkte)`, 'completion');
+
+              return null;
+            }
+          }
+
+          // Decrement timer if not all vehicles assigned
+          if (needsMoreVehicles(incident)) {
+            return { ...incident, timeRemaining: incident.timeRemaining - 1 };
+          }
+
+          return incident;
+        }).filter(i => {
+          if (i === null) return false;
+          if (i.timeRemaining <= 0) {
+            setStatistics(prev => ({
+              ...prev,
+              totalFailed: prev.totalFailed + 1,
+              currentStreak: 0,
+            }));
+            soundManager.playFailureSound();
+            addLog(`Einsatz ${i.type} in ${i.locationName} fehlgeschlagen (Zeit abgelaufen)`, 'failed');
+            return false;
+          }
+          return true;
+        }) as Incident[];
+
+        return updated;
+      });
+    }, 1000); // Timer läuft immer in Echtzeit (jede Sekunde)
+
+    return () => clearInterval(interval);
+  }, [gameStarted, isPaused, vehicles, incidents]);
+
+  // Generate new incidents periodically (lstsim.de style: based on incidents per hour)
+  // BUGFIX: Memory Leak behoben - setTimeout Cleanup hinzugefügt
+  useEffect(() => {
+    if (!gameStarted) return;
+
+    const settings = getDifficultySettings();
+    let isCancelled = false; // Flag um Timeout-Kette zu stoppen
+    const timeouts: ReturnType<typeof setTimeout>[] = []; // Array für alle aktiven Timeouts
+
+    // lstsim.de: Berechne Intervall basierend auf Einsätzen pro Stunde
+    // Formel: (3600 Sekunden / Einsätze pro Stunde) × Zufallsfaktor (0.7-1.3)
+    const baseInterval = (3600 / settings.incidentsPerHour) * 1000; // In Millisekunden
+
+    const scheduleNextIncident = () => {
+      if (isCancelled) return; // Stoppe wenn cancelled
+
+      // ⏰ REALISTISCHE TAGESZEIT-MULTIPLIKATOREN (LST-SIM Style)
+      const hour = Math.floor(gameTime / 60);
+      let timeMultiplier = 1.0;
+
+      if (hour >= 0 && hour < 6) {
+        // Nacht (0-6 Uhr): Deutlich weniger Einsätze
+        timeMultiplier = 1.8; // 1.8x Intervall = ~0.56x Einsätze
+      } else if (hour >= 6 && hour < 8) {
+        // Früher Morgen (6-8 Uhr): Leicht erhöht
+        timeMultiplier = 1.2; // ~0.83x Einsätze
+      } else if (hour >= 8 && hour < 10) {
+        // Morgendliche Rush Hour (8-10 Uhr): Deutlich mehr Verkehrsunfälle
+        timeMultiplier = 0.5; // 2x mehr Einsätze
+      } else if (hour >= 10 && hour < 12) {
+        // Vormittag (10-12 Uhr): Normal
+        timeMultiplier = 0.9;
+      } else if (hour >= 12 && hour < 14) {
+        // Mittagszeit (12-14 Uhr): Erhöht
+        timeMultiplier = 0.8; // ~1.25x Einsätze
+      } else if (hour >= 14 && hour < 17) {
+        // Nachmittag (14-17 Uhr): Normal
+        timeMultiplier = 1.0;
+      } else if (hour >= 17 && hour < 20) {
+        // Abendliche Rush Hour (17-20 Uhr): Peak!
+        timeMultiplier = 0.45; // ~2.2x mehr Einsätze
+      } else if (hour >= 20 && hour < 22) {
+        // Abend (20-22 Uhr): Erhöht (Nightlife beginnt)
+        timeMultiplier = 0.7; // ~1.4x Einsätze
+      } else {
+        // Späte Nacht (22-24 Uhr): Weniger, aber mehr Nightlife-Einsätze
+        timeMultiplier = 1.3; // ~0.77x Einsätze
+      }
+
+      // ⚡ WETTER-EFFEKT: Mehr Einsätze bei schlechtem Wetter
+      const weatherMultiplier = 1 / weatherConditions[weather.current].incidentMultiplier;
+      // z.B. Regen (1.2x Einsätze) = 1/1.2 = 0.83 (kürzeres Intervall)
+
+      // 🎲 KONTROLLIERTE VARIATION: Zufälliger Faktor (0.7-1.4 für Spielbarkeit!)
+      const randomFactor = 0.7 + Math.random() * 0.7;
+
+      // Berechne nächstes Intervall (MIT TAGESZEIT, WETTER und Variation!)
+      const nextInterval = baseInterval * timeMultiplier * weatherMultiplier * randomFactor;
+
+      const timeout = setTimeout(() => {
+        if (!isCancelled && incidents.length < settings.maxIncidents) {
+          generateIncident();
+        }
+        scheduleNextIncident(); // Schedule next incident
+      }, nextInterval);
+
+      timeouts.push(timeout);
+    };
+
+    // 🎲 Start initial incident mit kontrollierter Variation
+    // Erster Einsatz kommt schneller (30-80% des Base-Intervalls)
+    const initialDelay = baseInterval * (0.3 + Math.random() * 0.5); // 30-80% of base interval
+    const initialTimeout = setTimeout(() => {
+      if (!isCancelled) {
+        generateIncident();
+        scheduleNextIncident();
+      }
+    }, initialDelay);
+
+    timeouts.push(initialTimeout);
+
+    // Cleanup: Stoppe alle Timeouts wenn Component unmounted oder gameStarted sich ändert
+    return () => {
+      isCancelled = true;
+      timeouts.forEach(timeout => clearTimeout(timeout));
+    };
+  }, [gameStarted]);
+
+  // Game time progression (mit Geschwindigkeit und Pause)
+  useEffect(() => {
+    if (!gameStarted || isPaused) return;
+
+    // Intervall basierend auf Geschwindigkeit: 10s (1x), 5s (2x), 3.33s (3x), 2.5s (4x)
+    const baseInterval = 10000 / gameSpeed;
+
+    const interval = setInterval(() => {
+      setGameTime((prev) => prev + 1);
+    }, baseInterval);
+
+    return () => clearInterval(interval);
+  }, [gameStarted, gameSpeed, isPaused]);
+
+  // KRITISCHER FIX: RadioMessages Cleanup (verhindert Memory Leak)
+  // Behalte nur die letzten 100 Nachrichten ODER Nachrichten der letzten 30 Minuten
+  useEffect(() => {
+    if (!gameStarted) return;
+
+    const interval = setInterval(() => {
+      setRadioMessages(prev => {
+        // Behalte maximal 100 Nachrichten
+        const MAX_MESSAGES = 100;
+
+        // Entferne Nachrichten die älter als 30 Minuten sind
+        const MAX_AGE_MINUTES = 30;
+        const cutoffTime = gameTime - MAX_AGE_MINUTES;
+
+        let filtered = prev.filter(msg => {
+          // Parse Timestamp (Format: "HH:MM")
+          const [msgHours, msgMinutes] = msg.timestamp.split(':').map(Number);
+          const msgTimeInMinutes = msgHours * 60 + msgMinutes;
+
+          // Behalte Nachrichten die nicht zu alt sind
+          return msgTimeInMinutes >= cutoffTime;
+        });
+
+        // Wenn immer noch zu viele, behalte nur die neuesten 100
+        if (filtered.length > MAX_MESSAGES) {
+          filtered = filtered.slice(-MAX_MESSAGES);
+        }
+
+        return filtered;
+      });
+    }, 60000); // Prüfe jede Minute (Echtzeit)
+
+    return () => clearInterval(interval);
+  }, [gameStarted, gameTime]);
+
+  // KRITISCHER FIX: Call Auto-Timeout (verhindert überfüllte Call-Liste)
+  // Lehne automatisch Calls ab die 5 Minuten lang nicht beantwortet wurden
+  useEffect(() => {
+    if (!gameStarted || isPaused) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const CALL_TIMEOUT_MS = 5 * 60 * 1000; // 5 Minuten in Millisekunden
+
+      setCalls(prev => {
+        const timedOutCalls = prev.filter(call =>
+          !call.answered &&
+          call.status === 'waiting' &&
+          (now - call.timestamp) > CALL_TIMEOUT_MS
+        );
+
+        // Log für jeden abgelaufenen Call
+        timedOutCalls.forEach(call => {
+          addLog(`⚠️ Anruf verfallen: ${call.type} in ${call.locationName} (5 Min keine Reaktion)`, 'failed');
+          soundManager.playFailureSound();
+        });
+
+        // Entferne abgelaufene Calls
+        return prev.filter(call =>
+          call.answered ||
+          call.status !== 'waiting' ||
+          (now - call.timestamp) <= CALL_TIMEOUT_MS
+        );
+      });
+    }, 30000); // Prüfe alle 30 Sekunden (Echtzeit)
+
+    return () => clearInterval(interval);
+  }, [gameStarted, isPaused]);
+
+  // ⚡ LST-SIM STYLE: Prüfe ob Verstärkung disponiert wurde
+  // Verwende useRef um bereits erfüllte Verstärkungen zu tracken und infinite loop zu vermeiden
+  const fulfilledBackupIncidents = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (!gameStarted) return;
+
+    // Prüfe nur Incidents die noch nicht als fulfilled markiert wurden
+    const incidentsNeedingCheck = incidents.filter(
+      inc => inc.backupRequested && !inc.backupFulfilled && inc.backupVehiclesNeeded && !fulfilledBackupIncidents.current.has(inc.id)
+    );
+
+    if (incidentsNeedingCheck.length === 0) return;
+
+    const updatedIncidents = incidentsNeedingCheck.filter(inc => {
+      // Zähle wie viele Fahrzeuge zusätzlich zugewiesen wurden
+      const additionalAssigned = inc.assignedVehicleIds.length - (inc.requiredVehicles - inc.backupVehiclesNeeded);
+      return additionalAssigned >= inc.backupVehiclesNeeded;
+    });
+
+    // Nur updaten wenn wirklich etwas geändert werden muss
+    if (updatedIncidents.length > 0) {
+      setIncidents(prev =>
+        prev.map(inc => {
+          const shouldFulfill = updatedIncidents.find(u => u.id === inc.id);
+          if (shouldFulfill) {
+            fulfilledBackupIncidents.current.add(inc.id);
+            addLog(`✓ Verstärkung disponiert: ${inc.backupVehiclesNeeded} zusätzliche Einheit(en) für ${inc.type}`, 'assignment');
+            return { ...inc, backupFulfilled: true };
+          }
+          return inc;
+        })
+      );
+    }
+  }, [incidents, gameStarted]);
+
+  // Berechnete Werte MÜSSEN VOR allen useEffects stehen die sie verwenden
+  const { hours } = getHoursAndMinutes(gameTime);
+  const formattedTime = formatGameTime(gameTime);
+
+  // Weather change logic - MUSS VOR if (!gameStarted) sein
+  useEffect(() => {
+    if (!gameStarted || isPaused) return;
+
+    const checkWeatherChange = () => {
+      if (gameTime >= weather.nextChange) {
+        const newWeather = weather.forecast;
+        const duration = getWeatherDuration(newWeather);
+        const forecast = getNextWeather(newWeather, hours);
+
+        setWeather({
+          current: newWeather,
+          duration,
+          nextChange: gameTime + duration,
+          forecast,
+        });
+
+        addLog(`Wetter ändert sich: ${weatherConditions[newWeather].name}`, 'new' as const);
+      }
+    };
+
+    checkWeatherChange();
+  }, [gameTime, gameStarted, isPaused, weather, hours]);
+
+  // Auto-Assign: Automatische Fahrzeugempfehlung basierend auf Smart Assignment
+  const autoAssignVehicles = (callId: number): number[] => {
+    const call = calls.find(c => c.id === callId);
+    if (!call) return [];
+
+    const incidentType = incidentTypes.find(it => it.type === call.type);
+    if (!incidentType) return [];
+
+    // Erstelle temporären Incident für Bewertung
+    const tempIncident: Incident = {
+      id: 0, type: call.type, position: call.position, assignedVehicleIds: [],
+      priority: call.priority, description: call.description, timeRemaining: 60,
+      locationName: call.locationName, spawnTime: Date.now(),
+      requiredVehicles: incidentType.requiredVehicles, arrivedVehicles: 0,
+      processingDuration: 180, canEscalate: false, escalationTime: null,
+      hasEscalated: false, isMANV: false, involvedCount: 0, withSpecialRights: true,
+      speakRequestGiven: false,
+      backupRequested: false,
+      backupFulfilled: false,
+      backupVehiclesNeeded: 0,
+      initialReportGiven: false,
+    };
+
+    const { recommended } = getAutoAssignmentRecommendations(
+      vehicles.filter(v => isVehicleAvailable(v)),
+      tempIncident
+    );
+    return recommended.map(r => r.vehicleId);
+  };
+
+  // Get status badge color and text (lstsim.de Style - ERWEITERT)
+  const getStatusBadge = (status: VehicleStatus) => {
+    const badges: Record<string, { color: string; text: string; short: string }> = {
+      'S1': { color: '#30D158', text: 'S1 Frei auf Funk', short: 'S1' }, // Legacy
+      'S2': { color: '#30D158', text: 'S2 Frei auf Wache', short: 'S2' },
+      'S3': { color: '#FF9F0A', text: 'S3 Anfahrt', short: 'S3' },
+      'S4': { color: '#FF453A', text: 'S4 Einsatzort', short: 'S4' },
+      'S5': { color: '#0A84FF', text: 'S5 Sprechwunsch', short: 'S5' },
+      'S6': { color: '#8E8E93', text: 'S6 Nicht einsatzbereit', short: 'S6' },
+      'S7': { color: '#FFC107', text: 'S7 Tanken', short: 'S7' },
+      'S8': { color: '#FFD60A', text: 'S8 Rückfahrt', short: 'S8' },
+    };
+    return badges[status as string] || { color: '#8E8E93', text: 'Unbekannt', short: '??' };
+  };
+
+  if (!gameStarted) {
+    return (
+      <div className="start-screen-apple">
+        {/* Hero Section - Optimized for Z-Pattern */}
+        <div className="hero-section">
+          <div className="hero-content">
+            <div className="hero-logo-wrapper">
+              <div className="hero-logo-glow"></div>
+              <img src="/polizeistern-hessen.svg" alt="Polizei Hessen" className="hero-logo" />
+            </div>
+            <h1 className="hero-title">Polizei Hessen</h1>
+            <p className="hero-subtitle">Einsatzleitsystem Frankfurt am Main</p>
+            <p className="hero-description">
+              Koordiniere Einsätze, verwalte Einheiten und sorge für Sicherheit in der Stadt
+            </p>
+          </div>
+        </div>
+
+        {/* Content Container - F-Pattern Layout */}
+        <div className="apple-content-wrapper">
+          <div className="apple-content-container">
+
+            {/* Primary CTA - Quick Start Section */}
+            <div className="quick-start-section glass">
+              <div className="quick-start-content">
+                <div className="quick-start-left">
+                  <h2 className="quick-start-title">Schnellstart</h2>
+                  <p className="quick-start-description">
+                    Starte sofort mit empfohlenen Einstellungen
+                  </p>
+                  <div className="quick-start-info">
+                    <span className="info-item">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12z" fill="currentColor" opacity="0.3"/>
+                        <path d="M8 4v4l3 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      </svg>
+                      {selectedTime.toString().padStart(2, '0')}:00 Uhr
+                    </span>
+                    <span className="info-item">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M8 2L10 6h4l-3 3 1 4-4-2-4 2 1-4-3-3h4l2-4z" fill="currentColor"/>
+                      </svg>
+                      {difficulty}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  className="quick-start-button"
+                  onClick={() => policeStations[0] && startGame(policeStations[0].id)}
+                >
+                  <span className="button-text">Spiel starten</span>
+                  <svg className="button-arrow" width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M7 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Settings Section - Progressive Disclosure */}
+            <div className="settings-section">
+              <button
+                className="settings-toggle"
+                onClick={(e) => {
+                  const settingsContent = e.currentTarget.nextElementSibling;
+                  settingsContent?.classList.toggle('expanded');
+                  e.currentTarget.classList.toggle('active');
+                }}
+              >
+                <span className="settings-toggle-text">Einstellungen anpassen</span>
+                <svg className="settings-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+
+              <div className="settings-expandable">
+                <div className="settings-cards">
+              {/* Difficulty Card */}
+              <div className="setting-card glass">
+                <h3 className="setting-card-title">Schwierigkeitsgrad</h3>
+                <div className="difficulty-selector">
+                  <button
+                    className={`difficulty-option ${difficulty === 'Leicht' ? 'selected' : ''}`}
+                    onClick={() => setDifficulty('Leicht')}
+                  >
+                    <span className="option-label">Leicht</span>
+                    <span className="option-description">Ideal für Einsteiger</span>
+                  </button>
+                  <button
+                    className={`difficulty-option ${difficulty === 'Mittel' ? 'selected' : ''}`}
+                    onClick={() => setDifficulty('Mittel')}
+                  >
+                    <span className="option-label">Mittel</span>
+                    <span className="option-description">Ausgewogene Herausforderung</span>
+                  </button>
+                  <button
+                    className={`difficulty-option ${difficulty === 'Schwer' ? 'selected' : ''}`}
+                    onClick={() => setDifficulty('Schwer')}
+                  >
+                    <span className="option-label">Schwer</span>
+                    <span className="option-description">Für Profis</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Time Card */}
+              <div className="setting-card glass">
+                <h3 className="setting-card-title">Schichtbeginn</h3>
+                <div className="time-selector">
+                  <button
+                    className="time-selector-button"
+                    onClick={() => setIsTimeDropdownOpen(!isTimeDropdownOpen)}
+                  >
+                    <span className="time-display">{selectedTime.toString().padStart(2, '0')}:00</span>
+                    <span className="time-label">Uhr</span>
+                    <svg className={`chevron ${isTimeDropdownOpen ? 'open' : ''}`} width="14" height="8" viewBox="0 0 14 8" fill="none">
+                      <path d="M1 1L7 7L13 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                  {isTimeDropdownOpen && (
+                    <div className="time-dropdown-menu glass">
+                      <div className="time-options">
+                        {Array.from({ length: 24 }, (_, i) => (
+                          <button
+                            key={i}
+                            className={`time-option ${selectedTime === i ? 'selected' : ''}`}
+                            onClick={() => {
+                              setSelectedTime(i);
+                              setIsTimeDropdownOpen(false);
+                            }}
+                          >
+                            {i.toString().padStart(2, '0')}:00
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+              </div>
+            </div>
+
+            {/* Stations Section - Secondary Action */}
+            <div className="stations-container">
+              <div className="stations-header">
+                <h2 className="stations-title">Oder wähle ein spezifisches Revier</h2>
+                <span className="stations-badge">{policeStations.length} verfügbar</span>
+              </div>
+
+              <div className="stations-grid-apple">
+                {policeStations.map((station, index) => (
+                  <button
+                    key={station.id}
+                    className="station-tile glass"
+                    onClick={() => startGame(station.id)}
+                    aria-label={`Revier ${station.name} auswählen`}
+                    style={{ animationDelay: `${index * 0.03}s` }}
+                  >
+                    <div className="station-tile-icon">
+                      <img src="/polizeistern-hessen.svg" alt="" width="28" height="28" />
+                    </div>
+                    <span className="station-tile-name">{station.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Achievements - Bottom */}
+            {achievements.filter(a => a.unlocked).length > 0 && (
+              <div className="achievements-container glass">
+                <div className="achievements-header-apple">
+                  <h3 className="achievements-title-apple">Deine Erfolge</h3>
+                  <span className="achievements-badge-apple">
+                    {achievements.filter(a => a.unlocked).length} von {achievements.length} freigeschaltet
+                  </span>
+                </div>
+                <div className="achievements-list">
+                  {achievements.map(achievement => (
+                    <div
+                      key={achievement.id}
+                      className={`achievement-item ${achievement.unlocked ? 'unlocked' : 'locked'}`}
+                      title={achievement.description}
+                      role="img"
+                      aria-label={achievement.unlocked ? `Erfolg freigeschaltet: ${achievement.description}` : 'Erfolg gesperrt'}
+                    >
+                      <span className="achievement-emoji">{achievement.icon}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const selectedStationData = policeStations.find(s => s.id === selectedStation);
+
+  // Bestimme automatisch Dark Mode basierend auf Tageszeit
+  const isDarkMode = hours >= 20 || hours < 6;
+
+  // Immer OpenStreetMap verwenden
+  const mapTileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const mapAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+  // Count vehicles by status for filter display
+  const vehicleStatusCounts = {
+    S2: vehicles.filter(v => v.status === 'S2').length,
+    S3: vehicles.filter(v => v.status === 'S3').length,
+    S4: vehicles.filter(v => v.status === 'S4').length,
+    S5: vehicles.filter(v => v.status === 'S5').length,
+    S6: vehicles.filter(v => v.status === 'S6').length,
+    S8: vehicles.filter(v => v.status === 'S8').length,
+  };
+
+  return (
+    <div className="app">
+      {/* NEW LAYOUT: Map on left, right panel split into vehicles (top) and calls (bottom) */}
+      <div className="main-layout">
+        {/* LEFT: Full Map */}
+        <div className="map-container">
+          {/* Wetter-Overlay */}
+          {weather.current !== 'sunny' && (
+            <div className={`weather-overlay ${getWeatherOverlayClass(weather.current)}`} />
+          )}
+          <MapContainer
+            center={mapCenter}
+            zoom={13}
+            style={{ height: '100%', width: '100%' }}
+            className={isDarkMode ? 'map-dark-google' : ''}
+          >
+            <MapCenterUpdater center={mapCenter} zoom={mapZoom} />
+            <TileLayer
+              attribution={mapAttribution}
+              url={mapTileUrl}
+              maxZoom={20}
+            />
+
+            {policeStations.map(station => (
+              <Marker
+                key={station.id}
+                position={station.position}
+                icon={createStationIcon()}
+              >
+                <Popup>{station.name}</Popup>
+              </Marker>
+            ))}
+
+            {/* Gas Stations */}
+            {gasStations.map(station => (
+              <Marker
+                key={`gas-${station.id}`}
+                position={station.position}
+                icon={createGasStationIcon(station.brand)}
+              >
+                <Popup>
+                  <strong>⛽ {station.name}</strong><br/>
+                  {station.brand}
+                </Popup>
+              </Marker>
+            ))}
+
+            {incidents.map(incident => {
+              // Berechne wie lange der Einsatz schon aktiv ist
+              const elapsedSeconds = Math.floor((Date.now() - incident.spawnTime) / 1000);
+              const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+              const displayTime = elapsedMinutes > 0
+                ? `${elapsedMinutes} Min ${elapsedSeconds % 60}s`
+                : `${elapsedSeconds}s`;
+
+              return (
+                <Marker
+                  key={incident.id}
+                  position={incident.position}
+                  icon={createIncidentIcon(incident.priority, incident.hasEscalated)}
+                >
+                  <Popup>
+                    <strong>{incident.type}</strong>
+                    {incident.hasEscalated && <span style={{ color: '#FF453A', marginLeft: '8px' }}>⚠️ ESKALIERT</span>}
+                    <br />
+                    {incident.description}
+                    <br />
+                    Aktiv seit: {displayTime}
+                    <br />
+                    Bearbeitung: {Math.floor(incident.processingDuration / 60)} Min
+                  </Popup>
+                </Marker>
+              );
+            })}
+
+            {vehicles
+              .filter(vehicle => {
+                // Verstecke Fahrzeuge an der Wache (S2 - Frei auf Wache)
+                if (vehicle.status === 'S2') return false;
+                // Verstecke S3-Fahrzeuge die noch nicht losgefahren sind
+                // (S3 ohne Route ODER S3 mit Route aber noch kein Fortschritt)
+                if (vehicle.status === 'S3' && (!vehicle.route || vehicle.routeProgress === 0)) return false;
+                // Zeige alle anderen
+                return true;
+              })
+              .map(vehicle => {
+              // Calculate display position with offset for overlapping vehicles
+              const displayPosition = getDisplayPosition(vehicle, vehicles, policeStations);
+
+              return (
+                <React.Fragment key={vehicle.id}>
+                  <VehicleMarker
+                    position={displayPosition}
+                    hasSpecialRights={vehicle.assignedIncidentId ? (getIncidentById(incidents, vehicle.assignedIncidentId)?.withSpecialRights ?? true) : true}
+                    bearing={vehicle.bearing}
+                    status={vehicle.status}
+                    vehicle={vehicle}
+                  />
+
+                  {vehicle.route && vehicle.route.length > 0 && (
+                    <Polyline
+                      positions={vehicle.route}
+                      color={vehicle.status === 'S3' ? '#FF453A' : '#0A84FF'} // Rot für Hinfahrt, Blau für Rückfahrt
+                      weight={4}
+                      opacity={0.7}
+                    />
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </MapContainer>
+        </div>
+
+        {/* RIGHT: Three-Column Layout wie lstsim.de */}
+        <div className="right-panel-lstsim">
+          {/* LEFT COLUMN: Fahrzeuge */}
+          <div className="vehicle-list-panel">
+            <div className="panel-header">
+              <h3>Fahrzeuge</h3>
+              <div className="vehicle-filters">
+                <button
+                  className={`filter-btn ${vehicleFilter === 'all' ? 'active' : ''}`}
+                  onClick={() => setVehicleFilter('all')}
+                  title="Alle Fahrzeuge"
+                >
+                  Alle
+                </button>
+                <button
+                  className={`filter-btn ${vehicleFilter === 'S2' ? 'active' : ''}`}
+                  onClick={() => setVehicleFilter('S2')}
+                  title="Nur S2 (Frei auf Wache)"
+                  style={{ color: '#30D158' }}
+                >
+                  S2 ({vehicleStatusCounts.S2})
+                </button>
+                <button
+                  className={`filter-btn ${vehicleFilter === 'S3' ? 'active' : ''}`}
+                  onClick={() => setVehicleFilter('S3')}
+                  title="Nur S3 (Anfahrt)"
+                  style={{ color: '#FF9F0A' }}
+                >
+                  S3 ({vehicleStatusCounts.S3})
+                </button>
+                <button
+                  className={`filter-btn ${vehicleFilter === 'S4' ? 'active' : ''}`}
+                  onClick={() => setVehicleFilter('S4')}
+                  title="Nur S4 (Einsatzort)"
+                  style={{ color: '#FF453A' }}
+                >
+                  S4 ({vehicleStatusCounts.S4})
+                </button>
+              </div>
+            </div>
+            <div className="panel-content">
+              {[...vehicles]
+                .filter(v => vehicleFilter === 'all' || v.status === vehicleFilter)
+                .sort((a, b) => {
+                  const statusOrder: { [key in VehicleStatus]: number } = { S1: 1, S2: 2, S3: 3, S4: 4, S5: 5, S6: 6, S7: 7, S8: 8 };
+                  return statusOrder[a.status] - statusOrder[b.status];
+                })
+                .map(vehicle => {
+                  const statusInfo = getStatusBadge(vehicle.status);
+                  const incident = vehicle.assignedIncidentId ? getIncidentById(incidents, vehicle.assignedIncidentId) : undefined;
+                  const vehicleConfig = vehicleTypeConfigs[vehicle.vehicleType];
+
+                  return (
+                    <div
+                      key={vehicle.id}
+                      className={`vehicle-list-item ${selectedVehicleId === vehicle.id ? 'selected' : ''}`}
+                      onClick={() => {
+                        setMapCenter(vehicle.position);
+                        setMapZoom(17);
+                        setSelectedVehicleId(vehicle.id);
+                        soundManager.playSirenBeep();
+                      }}
+                    >
+                      <div className="vehicle-list-left">
+                        <span className="vehicle-icon">{vehicleConfig.icon}</span>
+                        <span className="vehicle-name">{vehicle.callsign}</span>
+                        <span className="vehicle-status-badge" style={{ background: statusInfo.color }}>
+                          {statusInfo.short}
+                        </span>
+                      </div>
+                      <div className="vehicle-list-right">
+                        <span className="vehicle-status-text">{statusInfo.text}</span>
+                      </div>
+                      {incident && (
+                        <div className="vehicle-list-incident">
+                          {incident.type} • {incident.locationName}
+                        </div>
+                      )}
+                      {vehicle.status === 'S8' && vehicle.canBeRedirected && (
+                        <div className="vehicle-redirect-hint">↻ Kann umgeleitet werden</div>
+                      )}
+                    </div>
+                  );
+                })}
+
+              {/* Selected Vehicle Details */}
+              {selectedVehicleId && vehicles.find(v => v.id === selectedVehicleId) && (
+                <VehicleDetails
+                  vehicle={vehicles.find(v => v.id === selectedVehicleId)!}
+                  onShiftChange={(oldVehicle, newVehicle) => {
+                    setVehicles(prev => prev.map(v =>
+                      v.id === oldVehicle.id ? newVehicle : v
+                    ));
+                    setGameTime(t => t + 5); // Schichtwechsel dauert 5 Minuten
+                  }}
+                  onAddLog={(message) => addLog(message, 'system')}
+                  gameTime={gameTime}
+                  onClose={() => setSelectedVehicleId(null)}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* MIDDLE COLUMN: Einsätze (lstsim.de Style) */}
+          <div className="incidents-panel-lstsim">
+            <div className="panel-header">
+              <h3>Aktive Einsätze ({incidents.length})</h3>
+            </div>
+            <div className="panel-content">
+              {incidents.length === 0 && (
+                <div className="empty-state">Keine aktiven Einsätze</div>
+              )}
+              {incidents.map(incident => {
+                const minETA = calculateMinETA(incident, vehicles);
+                const assignedVehicles = vehicles.filter(v => incident.assignedVehicleIds.includes(v.id));
+
+                // Berechne wie lange der Einsatz schon aktiv ist
+                const elapsedTimeSeconds = Math.floor((Date.now() - incident.spawnTime) / 1000);
+                const elapsedMinutes = Math.floor(elapsedTimeSeconds / 60);
+                const elapsedSecondsDisplay = elapsedTimeSeconds % 60;
+                const elapsedTimeDisplay = elapsedMinutes > 0
+                  ? `${elapsedMinutes}:${elapsedSecondsDisplay.toString().padStart(2, '0')}`
+                  : `${elapsedTimeSeconds}s`;
+
+                return (
+                  <div key={incident.id} className={`incident-card-lstsim priority-${incident.priority}`}>
+                    <div className="incident-card-header">
+                      <div className="incident-card-title">
+                        {incident.hasEscalated && <span className="escalation-badge">!</span>}
+                        <strong>{incident.type}</strong>
+                        <span className={`priority-badge-lstsim priority-${incident.priority}`}>
+                          {getIncidentPriorityText(incident.priority)}
+                        </span>
+                      </div>
+                      <span className="time-remaining-large" title={`Aktiv seit ${elapsedTimeDisplay}`}>{elapsedTimeDisplay}</span>
+                    </div>
+
+                    <div className="incident-location-lstsim">
+                      {incident.locationName}
+                    </div>
+
+                    {/* MANV Progress-Bar */}
+                    {incident.isMANV && (
+                      <div className="manv-progress-container">
+                        <div className="manv-progress-label">
+                          🚨 MANV-Sichtung: {incident.manvTriageProgress || 0}%
+                        </div>
+                        <div className="manv-progress-bar">
+                          <div
+                            className="manv-progress-fill"
+                            style={{ width: `${incident.manvTriageProgress || 0}%` }}
+                          >
+                            {incident.manvTriageProgress && incident.manvTriageProgress > 20 ? `${Math.round(incident.manvTriageProgress)}%` : ''}
+                          </div>
+                        </div>
+                        <div className="manv-info">
+                          Beteiligte: {incident.involvedCount || 0} • Vor Ort: {incident.arrivedVehicles}/{incident.requiredVehicles}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="incident-status-row">
+                      <span>Fahrzeuge: {incident.arrivedVehicles}/{incident.requiredVehicles}</span>
+                      {minETA > 0 && <span>ETA: {Math.ceil(minETA)} Min</span>}
+                      <button
+                        className="map-center-btn"
+                        onClick={() => { setMapCenter(incident.position); setMapZoom(16); }}
+                        title="Auf Karte zentrieren und heranzoomen"
+                      >
+                        ⊕
+                      </button>
+                    </div>
+
+                    {/* Zugewiesene Fahrzeuge */}
+                    {assignedVehicles.length > 0 && (
+                      <div className="assigned-vehicles-list">
+                        {assignedVehicles.map(v => {
+                          const config = vehicleTypeConfigs[v.vehicleType];
+                          const statusInfo = getStatusBadge(v.status);
+                          return (
+                            <div key={v.id} className="assigned-vehicle-chip">
+                              {config.icon} {v.callsign || `FZ${v.id}`} <span style={{color: statusInfo.color}}>●</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* ⚡ LST-SIM STYLE: Verstärkungsanforderung */}
+                    {incident.backupRequested && !incident.backupFulfilled && (
+                      <div className="backup-request-warning">
+                        <span className="backup-icon">⚠️</span>
+                        <span className="backup-text">
+                          Verstärkung angefordert: <strong>+{incident.backupVehiclesNeeded} Einheit(en)</strong> benötigt
+                        </span>
+                      </div>
+                    )}
+
+                    {incident.backupRequested && incident.backupFulfilled && (
+                      <div className="backup-fulfilled">
+                        <span className="backup-icon">✓</span>
+                        <span className="backup-text">Verstärkung disponiert</span>
+                      </div>
+                    )}
+
+                    {/* Weitere Fahrzeuge Button - öffnet Modal */}
+                    <button
+                      className="backup-button"
+                      onClick={() => requestBackup(incident.id)}
+                      title="Weitere Fahrzeuge zuweisen"
+                    >
+                      + Weitere Fahrzeuge
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN: Funkverkehr (Funksprüche & Sprechwünsche kombiniert) */}
+          <div className="calls-and-speaks-panel">
+            {/* Kombiniertes Funkverkehr-Fenster */}
+            <div className="radio-section-combined">
+              <div className="panel-header-small">
+                <h4>📻 Funkverkehr</h4>
+                <span className="radio-count-badge">
+                  {radioMessages.length} Meldungen
+                  {vehicles.filter(v => v.status === 'S5').length > 0 && (
+                    <span className="speak-request-indicator"> • {vehicles.filter(v => v.status === 'S5').length} Sprechwunsch</span>
+                  )}
+                </span>
+              </div>
+              <div className="panel-content-small radio-combined-content">
+                {/* Sprechwünsche oben (wichtig) - MINIMALISTISCH */}
+                {vehicles.filter(v => v.status === 'S5').map(vehicle => {
+                  const config = vehicleTypeConfigs[vehicle.vehicleType];
+                  return (
+                    <div
+                      key={vehicle.id}
+                      className="speak-request-compact"
+                      onClick={() => {
+                        setSelectedSpeakRequestVehicle(vehicle);
+                        setIsSpeakRequestModalOpen(true);
+                        soundManager.playSirenBeep();
+                      }}
+                      title="Klicken für Details"
+                    >
+                      <span className="speak-indicator">🔵</span>
+                      <span className="speak-callsign">{config.icon} {vehicle.callsign}</span>
+                      <span className="speak-label">Sprechwunsch</span>
+                    </div>
+                  );
+                })}
+
+                {/* Funksprüche darunter */}
+                <RadioLog
+                  messages={radioMessages}
+                  onRespond={(messageId) => {
+                    const message = radioMessages.find(m => m.id === messageId);
+                    if (message && message.vehicleId) {
+                      const hours = Math.floor(gameTime / 60);
+                      const minutes = Math.floor(gameTime % 60);
+                      const timestamp = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+
+                      const responseId = radioMessageIdRef.current++;
+                      const responseMessage: RadioMessage = {
+                        id: responseId,
+                        timestamp,
+                        message: 'Verstanden',
+                        type: 'outgoing',
+                        requiresResponse: false,
+                      };
+                      setRadioMessages(prev => [...prev, responseMessage]);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Anrufe Section */}
+            <div className="calls-section">
+              <div className="panel-header-small">
+                <h4>Anrufe</h4>
+                <button className="new-call-btn-small" onClick={() => generateCall()}>+</button>
+              </div>
+              <div className="panel-content-small">
+                {calls.length === 0 && (
+                  <div className="empty-state-small">Keine eingehenden Anrufe</div>
+                )}
+                {calls.map(call => {
+                  const timeAgo = Math.floor((Date.now() - call.timestamp) / 1000);
+
+                  // Wartezeit-basierte Klasse
+                  let waitTimeClass = 'wait-time-normal';
+                  if (timeAgo > 120) {
+                    waitTimeClass = 'wait-time-critical'; // 2+ Minuten - ROT + Pulsieren
+                  } else if (timeAgo > 60) {
+                    waitTimeClass = 'wait-time-urgent'; // 1-2 Minuten - ORANGE
+                  } else if (timeAgo > 30) {
+                    waitTimeClass = 'wait-time-warning'; // 30-60s - GELB
+                  }
+
+                  // Neu eingetroffene Anrufe blinken (erste 5 Sekunden)
+                  const isNew = timeAgo < 5;
+
+                  return (
+                    <div
+                      key={call.id}
+                      className={`call-item-lstsim ${waitTimeClass} ${isNew ? 'call-new' : ''}`}
+                    >
+                      <div className="call-header-lstsim">
+                        <span className="call-time-lstsim">{timeAgo}s</span>
+                        <span className={`call-priority-badge priority-${call.priority}`}>
+                          {call.priority === 'high' ? 'DRINGEND' : call.priority === 'medium' ? 'NORMAL' : 'NIEDRIG'}
+                        </span>
+                      </div>
+                      <div className="call-type-lstsim">{call.type}</div>
+                      <div className="call-location-lstsim">{call.locationName}</div>
+                      <button
+                        className="accept-call-btn-lstsim"
+                        onClick={() => openCallModal(call.id)}
+                      >
+                        Anruf annehmen
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* BOTTOM BAR: Minimalistisches Design */}
+      <div className="bottom-bar">
+        <div className="bottom-bar-left">
+          <span className="time-text">{formattedTime}</span>
+          <WeatherDisplay weather={weather} gameTime={gameTime} />
+          <span className="score-text">{score}</span>
+        </div>
+        <div className="bottom-bar-center">
+          <span className="station-name">{selectedStationData?.name}</span>
+        </div>
+        <div className="bottom-bar-right">
+          <div className="speed-controls">
+            <button
+              className={`speed-btn ${gameSpeed === 1 && !isPaused ? 'active' : ''}`}
+              onClick={() => { setGameSpeed(1); setIsPaused(false); }}
+            >
+              1×
+            </button>
+            <button
+              className={`speed-btn ${gameSpeed === 2 && !isPaused ? 'active' : ''}`}
+              onClick={() => { setGameSpeed(2); setIsPaused(false); }}
+            >
+              2×
+            </button>
+            <button
+              className={`speed-btn ${gameSpeed === 3 && !isPaused ? 'active' : ''}`}
+              onClick={() => { setGameSpeed(3); setIsPaused(false); }}
+            >
+              3×
+            </button>
+            <button
+              className={`speed-btn ${gameSpeed === 4 && !isPaused ? 'active' : ''}`}
+              onClick={() => { setGameSpeed(4); setIsPaused(false); }}
+            >
+              4×
+            </button>
+          </div>
+          <button
+            className={`pause-btn ${isPaused ? 'active' : ''}`}
+            onClick={() => setIsPaused(!isPaused)}
+          >
+            {isPaused ? '▶' : '⏸'}
+          </button>
+          <button className="footer-btn" onClick={() => setShowStatsModal(true)}>
+            Statistik
+          </button>
+          <button className="footer-btn" onClick={() => setShowProtocolPanel(true)} title="Einsatzprotokoll öffnen (Tastenkürzel: L)">
+            Protokoll
+          </button>
+        </div>
+      </div>
+
+      {/* Toast-Benachrichtigungen deaktiviert - Anrufe blinken stattdessen im Anruf-Bereich */}
+
+      {showAchievementToast && (
+        <div style={{
+          position: 'fixed',
+          top: '70px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#30d158',
+          color: 'white',
+          padding: '16px 24px',
+          borderRadius: '12px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+          zIndex: 2000,
+          fontSize: '15px',
+          fontWeight: '600',
+          animation: 'slideIn 0.3s ease-out',
+        }}>
+          {showAchievementToast.icon} {showAchievementToast.title} freigeschaltet!
+        </div>
+      )}
+
+      <StatisticsModal
+        isOpen={showStatsModal}
+        onClose={() => setShowStatsModal(false)}
+        stats={statistics}
+      />
+
+      <CallModal
+        call={selectedCall}
+        isOpen={isCallModalOpen}
+        onClose={() => {
+          setIsCallModalOpen(false);
+          setSelectedCall(null);
+        }}
+        onAccept={acceptCall}
+        onReject={rejectCall}
+        availableVehicles={vehicles.filter(v => isVehicleAvailable(v))}
+        onAutoAssign={autoAssignVehicles}
+      />
+
+      <BackupModal
+        incident={selectedIncidentForBackup}
+        isOpen={isBackupModalOpen}
+        onClose={() => {
+          setIsBackupModalOpen(false);
+          setSelectedIncidentForBackup(null);
+        }}
+        onConfirm={confirmBackup}
+        availableVehicles={vehicles.filter(v =>
+          (v.status === 'S2' || (v.status === 'S8' && v.canBeRedirected)) &&
+          !selectedIncidentForBackup?.assignedVehicleIds.includes(v.id)
+        )}
+      />
+
+      {isSpeakRequestModalOpen && selectedSpeakRequestVehicle && (
+        <SpeakRequestModal
+          vehicle={selectedSpeakRequestVehicle}
+          incident={selectedSpeakRequestVehicle.assignedIncidentId ? getIncidentById(incidents, selectedSpeakRequestVehicle.assignedIncidentId) : null}
+          requestType={selectedSpeakRequestVehicle.speakRequestType || 'situation_report'}
+          onClose={() => {
+            setIsSpeakRequestModalOpen(false);
+            setSelectedSpeakRequestVehicle(null);
+          }}
+          onConfirm={() => {
+            if (!selectedSpeakRequestVehicle) return;
+
+            const returnStatus = selectedSpeakRequestVehicle.previousStatus || 'S4';
+
+            setVehicles(prev => prev.map(v =>
+              v.id === selectedSpeakRequestVehicle.id
+                ? {
+                    ...v,
+                    status: returnStatus,
+                    speakRequest: null,
+                    speakRequestType: undefined,
+                    previousStatus: null,
+                  }
+                : v
+            ));
+
+            addLog(`S-${selectedSpeakRequestVehicle.id.toString().padStart(2, '0')} S5→${returnStatus} Sprechwunsch bestätigt`, 'assignment');
+
+            // Funkspruch bestätigen
+            addRadioMessage(selectedSpeakRequestVehicle.id, 'S5', returnStatus, {
+              customMessage: 'Verstanden, fortfahren',
+            });
+
+            setIsSpeakRequestModalOpen(false);
+            setSelectedSpeakRequestVehicle(null);
+          }}
+        />
+      )}
+
+      <ProtocolPanel
+        isOpen={showProtocolPanel}
+        onClose={() => setShowProtocolPanel(false)}
+        entries={protocolEntries}
+      />
+
+      {/* Audio Debug Panel */}
+      <AudioDebugPanel />
+    </div>
+  );
+}
+
+export default App;

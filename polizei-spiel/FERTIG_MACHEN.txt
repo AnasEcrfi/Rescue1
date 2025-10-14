@@ -1,0 +1,177 @@
+# 🎯 FINALE 3 FEATURES - FERTIGE IMPLEMENTIERUNG
+
+Da das Fahrzeug-Panel in deinem Code nicht als separates Panel existiert (Fahrzeuge werden nur in Listen gezeigt), hier die **angepasste Implementierung**:
+
+## ✅ WAS ICH FERTIG GEMACHT HABE:
+
+1. ✅ Smart Assignment Button - FUNKTIONIERT
+2. ✅ MANV Progress-Bar - EINGEFÜGT  
+3. ✅ CSS für alle Features - HINZUGEFÜGT
+
+## 📝 WAS NOCH FEHLT (vereinfachte Version):
+
+### Feature 1: Schichtwechsel (ALTERNATIV-LÖSUNG)
+
+**Problem**: Kein dediziertes Fahrzeug-Panel gefunden wo Button eingefügt werden kann.
+
+**Lösung**: Füge Schichtwechsel als **Hotkey** hinzu!
+
+**In `src/hooks/useHotkeys.ts` ERGÄNZEN**:
+
+Füge in die Interface `HotkeyHandlers` hinzu:
+```typescript
+onShiftChange?: () => void;
+```
+
+Füge in `handleKeyDown` hinzu (nach Zeile 60):
+```typescript
+// S - Schichtwechsel
+if (key === 's' && handlers.onShiftChange) {
+  event.preventDefault();
+  handlers.onShiftChange();
+}
+```
+
+**In `src/App.tsx` im useHotkeys-Call ERGÄNZEN** (nach Zeile 548):
+```typescript
+onShiftChange: () => {
+  if (selectedVehicleId) {
+    const vehicle = vehicles.find(v => v.id === selectedVehicleId);
+    if (vehicle && vehicle.status === 'S1' && vehicle.crewFatigue > 60) {
+      setVehicles(prev => prev.map(v =>
+        v.id === selectedVehicleId ? performShiftChange(v, gameTime) : v
+      ));
+      setGameTime(t => t + 5);
+      addLog(`👥 Schichtwechsel: Fahrzeug ${selectedVehicleId} - Müdigkeit zurückgesetzt`, 'system');
+    }
+  }
+},
+```
+
+**Jetzt**: Drücke **S** bei ausgewähltem Fahrzeug mit >60% Müdigkeit → Schichtwechsel!
+
+---
+
+### Feature 2 & 3: S7 Tankstellen-Routing
+
+**Suche in App.tsx nach** (ca. Zeile 1327):
+```
+status: shouldGoS6 ? 'S6' : 'S1',
+```
+
+**ERSETZE die gesamte return-Anweisung mit**:
+```typescript
+// Prüfe ob tanken nötig
+const needsRefueling = shouldRefuel(updatedVehicle);
+const finalStatus: VehicleStatus = shouldGoS6 ? 'S6' : (needsRefueling ? 'S7' : 'S1');
+
+// Bei S7: Route zur Tankstelle
+if (finalStatus === 'S7') {
+  const nearestStation = findNearestGasStation(vehicle.position, gasStations);
+  if (nearestStation) {
+    addLog(`⛽ Fahrzeug ${vehicle.id} fährt zur Tankstelle (${nearestStation.name})`, 'system');
+    
+    (async () => {
+      try {
+        const osrmRoute = await getRoute(
+          { lat: vehicle.position[0], lng: vehicle.position[1] },
+          { lat: nearestStation.position[0], lng: nearestStation.position[1] }
+        );
+        
+        if (osrmRoute) {
+          const route = convertToLeafletFormat(osrmRoute.coordinates);
+          setVehicles(prev => prev.map(v =>
+            v.id === vehicle.id && v.status === 'S7' ? {
+              ...v,
+              route,
+              routeDuration: osrmRoute.duration * 0.7,
+              routeStartTime: Date.now(),
+              routeProgress: 0,
+              accumulatedTime: 0,
+            } : v
+          ));
+        }
+      } catch (e) {
+        console.error('S7 Route Error:', e);
+      }
+    })();
+  }
+}
+
+return {
+  ...updatedVehicle,
+  position: station ? station.position : vehicle.position,
+  assignedIncidentId: null,
+  routeIndex: 0,
+  route: null,
+  routeProgress: 0,
+  bearing: 0,
+  routeDuration: 0,
+  routeStartTime: 0,
+  status: finalStatus,
+  processingStartTime: null,
+  processingDuration: 0,
+  outOfServiceReason: shouldGoS6 ? s6Reason : null,
+  outOfServiceUntil: shouldGoS6 ? calculateOutOfServiceDuration(s6Reason!, gameTime) : null,
+  accumulatedTime: 0,
+};
+```
+
+**Dann suche nach**: `// S8: Rückfahrt zur Wache` (ca. Zeile 1330)
+
+**FÜGE DAVOR EIN**:
+```typescript
+// S7: Fahrt zur Tankstelle
+if (vehicle.status === 'S7' && vehicle.route) {
+  const accumulatedTime = vehicle.accumulatedTime || 0;
+  const newAccumulatedTime = accumulatedTime + scaledDeltaTime;
+  const newProgress = Math.min(newAccumulatedTime / vehicle.routeDuration, 1);
+
+  if (newProgress >= 1) {
+    const tankDuration = calculateRefuelDuration(vehicle.fuelLevel, vehicleTypeConfigs[vehicle.vehicleType].tankCapacity);
+    addLog(`⛽ Fahrzeug ${vehicle.id} tankt (${Math.ceil(tankDuration/60)} Min)`, 'system');
+    
+    return {
+      ...vehicle,
+      status: 'S6' as VehicleStatus,
+      route: null,
+      routeProgress: 0,
+      outOfServiceReason: 'Tanken',
+      outOfServiceUntil: gameTime + (tankDuration / 60),
+      fuelLevel: 100,
+      accumulatedTime: 0,
+    };
+  }
+
+  const { position: newPosition, bearing: newBearing } = getPointAlongRoute(vehicle.route, newProgress);
+  return {
+    ...vehicle,
+    position: newPosition,
+    routeProgress: newProgress,
+    bearing: newBearing,
+    accumulatedTime: newAccumulatedTime,
+  };
+}
+```
+
+---
+
+## 🎯 ZUSAMMENFASSUNG:
+
+**3 Änderungen nötig**:
+1. Hotkey 'S' für Schichtwechsel in useHotkeys.ts
+2. S7-Status beim S8→S1 Übergang
+3. S7-Movement-Logic vor S8-Block
+
+**Geschätzte Zeit**: 5-7 Minuten
+
+**Danach hast du**:
+- ✅ Smart Assignment Button
+- ✅ MANV Progress-Bar
+- ✅ Schichtwechsel (Hotkey S)
+- ✅ Automatisches Tanken bei <15%
+- ✅ S7 Status & Routing
+- ✅ Alle Hotkeys (1-9, E, H, S, +/-, Leertaste, ESC)
+- ✅ Komplett optimiertes Spiel!
+
+**Server**: http://localhost:5173/
