@@ -1,7 +1,5 @@
 // OSRM Routing Service für echte Straßen-Navigation
 
-import { routeCache } from '../utils/routeCache';
-
 const OSRM_BASE_URL = 'https://router.project-osrm.org/route/v1/driving';
 
 export interface RoutePoint {
@@ -22,21 +20,7 @@ export interface OSRMRoute {
  * @returns Route mit Koordinaten, Distanz und Dauer
  */
 export async function getRoute(start: RoutePoint, end: RoutePoint): Promise<OSRMRoute | null> {
-  // ⚡ 1. Prüfe Cache
-  const cacheKey: [number, number] = [start.lat, start.lng];
-  const cacheEnd: [number, number] = [end.lat, end.lng];
-  const cached = routeCache.get(cacheKey, cacheEnd);
-
-  if (cached) {
-    console.log('⚡ CACHE HIT: Route aus Cache geladen');
-    return {
-      coordinates: cached.route,
-      distance: cached.distance,
-      duration: cached.duration,
-    };
-  }
-
-  console.log('📡 CACHE MISS: Lade Route von OSRM API');
+  console.log('📡 Lade Route von OSRM API');
 
   try {
     // OSRM erwartet Koordinaten im Format: lng,lat;lng,lat
@@ -63,14 +47,12 @@ export async function getRoute(start: RoutePoint, end: RoutePoint): Promise<OSRM
     const route = data.routes[0];
 
     const result: OSRMRoute = {
-      coordinates: route.geometry.coordinates, // [lng, lat] format
+      coordinates: route.geometry.coordinates, // [lng, lat] format from OSRM
       distance: route.distance,
       duration: route.duration,
     };
 
-    // ⚡ 2. Speichere im Cache
-    routeCache.set(cacheKey, cacheEnd, result.coordinates, result.duration, result.distance);
-    console.log('💾 Route im Cache gespeichert');
+    console.log('✓ OSRM Route empfangen');
 
     return result;
   } catch (error) {
@@ -200,7 +182,7 @@ export function getStraightLineRoute(start: RoutePoint, end: RoutePoint, steps: 
       lat += noise;
       lng += noise;
 
-      route.push([lat, lng]);
+      route.push([lat, lng]); // TEMPORARY FIX: Zurück zu [lat, lng]
     }
   } else {
     // Diagonale Route mit realistischen Kurven
@@ -227,7 +209,7 @@ export function getStraightLineRoute(start: RoutePoint, end: RoutePoint, steps: 
       const lat = baseLat + Math.cos(perpAngle) * totalOffset;
       const lng = baseLng + Math.sin(perpAngle) * totalOffset;
 
-      route.push([lat, lng]);
+      route.push([lat, lng]); // TEMPORARY FIX: Zurück zu [lat, lng]
     }
   }
 

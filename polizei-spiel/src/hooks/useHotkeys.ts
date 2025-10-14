@@ -18,6 +18,7 @@ import { useEffect } from 'react';
  * - C: Anruf annehmen (ältester wartender)
  * - R: Schnell-Responder (nächstes verfügbares Fahrzeug alarmieren)
  * - D: Details-Panel togglen
+ * - P: 🚔 Streife starten/stoppen (ausgewähltes Fahrzeug)
  * - ?/H: Hilfe-Overlay anzeigen
  */
 
@@ -38,6 +39,7 @@ export interface HotkeyHandlers {
   onQuickDispatch?: () => void; // R - Quick Responder
   onToggleDetails?: () => void; // D - Details togglen
   onShowHelp?: () => void; // ? - Hilfe
+  onTogglePatrol?: () => void; // P - 🚔 Streife starten/stoppen
 }
 
 export function useHotkeys(handlers: HotkeyHandlers, enabled: boolean = true) {
@@ -144,6 +146,12 @@ export function useHotkeys(handlers: HotkeyHandlers, enabled: boolean = true) {
       if (key === '?' && handlers.onShowHelp) {
         event.preventDefault();
         handlers.onShowHelp();
+      }
+
+      // P - 🚔 Streife starten/stoppen
+      if (key === 'p' && handlers.onTogglePatrol) {
+        event.preventDefault();
+        handlers.onTogglePatrol();
       }
     };
 

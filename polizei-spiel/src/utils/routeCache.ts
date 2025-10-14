@@ -1,5 +1,8 @@
 // ⚡ Performance #8: Route-Caching mit LRU (Least Recently Used)
 
+// 🔧 CACHE VERSION: Bei Änderungen am Koordinaten-Format erhöhen!
+const CACHE_VERSION = 3; // v3: Cache nur in routeCalculator.ts (konvertierte Koordinaten)
+
 interface CachedRoute {
   route: [number, number][];
   duration: number;
@@ -11,6 +14,16 @@ class RouteCache {
   private cache: Map<string, CachedRoute> = new Map();
   private readonly maxSize: number = 100; // Max 100 cached routes
   private readonly cacheDuration: number = 300000; // 5 Minuten
+
+  constructor() {
+    // Prüfe Cache-Version und lösche bei Version-Mismatch
+    const storedVersion = localStorage.getItem('routeCacheVersion');
+    if (storedVersion !== String(CACHE_VERSION)) {
+      console.log(`🔄 Route-Cache Version ${storedVersion} → ${CACHE_VERSION}: Cache wird gelöscht`);
+      this.clear();
+      localStorage.setItem('routeCacheVersion', String(CACHE_VERSION));
+    }
+  }
 
   /**
    * Generiert Cache-Key aus Start- und Endposition
@@ -62,7 +75,9 @@ class RouteCache {
     // LRU: Wenn Cache voll, entferne ältesten Eintrag
     if (this.cache.size >= this.maxSize) {
       const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
     }
 
     this.cache.set(key, {

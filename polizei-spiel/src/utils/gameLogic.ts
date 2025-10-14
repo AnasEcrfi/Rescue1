@@ -21,7 +21,7 @@ export const getMapOverlayOpacity = (hour: number): number => {
 };
 
 // Helper: Gewichtete Zufallsauswahl basierend auf Tageszeit
-export const getWeightedIncidentType = (hour: number): IncidentType => {
+export const getWeightedIncidentType = (hour: number, weather?: WeatherType): IncidentType => {
   const timeOfDay = getTimeOfDay(hour);
 
   // Basis-Gewichtungen (alle Einsatztypen mit Standardgewichtung 1)
@@ -46,6 +46,15 @@ export const getWeightedIncidentType = (hour: number): IncidentType => {
     if (timeOfDay === 'rushHour') {
       if (incident.type === 'Verkehrsunfall') weight *= 3;
       if (incident.type === 'Ruhestörung') weight *= 2;
+    }
+
+    // 🌦️ BUG FIX: Wetter-Modifikatoren anwenden
+    if (weather) {
+      const weatherCondition = weatherConditions[weather];
+      const modifier = weatherCondition.incidentTypeModifiers[incident.type];
+      if (modifier !== undefined) {
+        weight *= modifier;
+      }
     }
 
     return weight;
@@ -268,14 +277,16 @@ export const createCallIcon = (priority: 'low' | 'medium' | 'high') => {
  * @param weather Aktuelles Wetter
  * @param crewFatigue Müdigkeit der Besatzung (0-100)
  * @param hasSpecialRights Ob Fahrzeug mit Sonderrechten (Blaulicht) fährt
- * @returns Routendauer in Sekunden
+ * @param gameSpeed Spielgeschwindigkeit (1x, 2x, 3x, 4x) - optional, default 1
+ * @returns Routendauer in Sekunden (bereits an gameSpeed angepasst)
  */
 export const calculateRealisticRouteDuration = (
   vehicleType: VehicleType,
   routeDistance: number,
   weather: WeatherType,
   crewFatigue: number,
-  hasSpecialRights: boolean
+  hasSpecialRights: boolean,
+  gameSpeed: number = 1
 ): number => {
   const vehicleConfig = vehicleTypeConfigs[vehicleType];
 
@@ -302,8 +313,12 @@ export const calculateRealisticRouteDuration = (
   const effectiveSpeed = baseSpeed * weatherFactor * fatigueFactor * specialRightsFactor * cityFactor;
 
   // Routendauer (Weg/Geschwindigkeit)
-  const duration = routeDistance / effectiveSpeed;
+  let duration = routeDistance / effectiveSpeed;
 
-  // Minimum 30 Sekunden (auch für sehr kurze Strecken)
-  return Math.max(30, duration);
+  // 🎮 BUG FIX: Spielgeschwindigkeit anwenden
+  // Bei gameSpeed = 2x sollte die Route in halber Zeit durchfahren werden
+  duration = duration / gameSpeed;
+
+  // Minimum 30 Sekunden (auch für sehr kurze Strecken, bereits mit gameSpeed skaliert)
+  return Math.max(30 / gameSpeed, duration);
 };

@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Vehicle } from '../types';
 import { vehicleTypeConfigs } from '../constants/vehicleTypes';
 import { performShiftChange } from '../utils/refuelingSystem';
+import PatrolAreaSelector from './PatrolAreaSelector';
 
 interface VehicleDetailsProps {
   vehicle: Vehicle;
@@ -9,6 +10,9 @@ interface VehicleDetailsProps {
   onAddLog: (message: string) => void;
   gameTime: number;
   onClose?: () => void;
+  // 🚔 PATROL SYSTEM
+  onStartPatrol?: (vehicleId: number, areaId?: string) => void;
+  onStopPatrol?: (vehicleId: number) => void;
 }
 
 const VehicleDetails: React.FC<VehicleDetailsProps> = ({
@@ -17,12 +21,17 @@ const VehicleDetails: React.FC<VehicleDetailsProps> = ({
   onAddLog,
   gameTime,
   onClose,
+  onStartPatrol,
+  onStopPatrol,
 }) => {
   const config = vehicleTypeConfigs[vehicle.vehicleType];
+  const [isPatrolSelectorOpen, setIsPatrolSelectorOpen] = useState(false);
+  const [isStartingPatrol, setIsStartingPatrol] = useState(false);
 
   // Status-Badge Helper
   const getStatusBadge = (status: string) => {
     const badges: { [key: string]: { color: string; text: string } } = {
+      S1: { color: '#30D158', text: 'Frei auf Funk' },
       S2: { color: '#30D158', text: 'Frei auf Wache' },
       S3: { color: '#FF9F0A', text: 'Anfahrt' },
       S4: { color: '#FF453A', text: 'Am Einsatzort' },
@@ -49,7 +58,7 @@ const VehicleDetails: React.FC<VehicleDetailsProps> = ({
   };
 
   const handleShiftChange = () => {
-    if (vehicle.status !== 'S1') {
+    if (vehicle.status !== 'S1' && vehicle.status !== 'S2') {
       onAddLog(`⚠️ Fahrzeug ${vehicle.id}: Schichtwechsel nur an der Wache möglich (Status ${vehicle.status})`);
       return;
     }
@@ -61,6 +70,26 @@ const VehicleDetails: React.FC<VehicleDetailsProps> = ({
     const newVehicle = performShiftChange(vehicle, gameTime);
     onShiftChange(vehicle, newVehicle);
     onAddLog(`👥 Schichtwechsel: Fahrzeug ${vehicle.id} - Müdigkeit zurückgesetzt`);
+  };
+
+  // 🚔 PATROL: Öffne Area Selector
+  const handleOpenPatrolSelector = () => {
+    setIsPatrolSelectorOpen(true);
+  };
+
+  // 🚔 PATROL: Start patrol mit ausgewählter Area
+  const handlePatrolAreaSelected = async (areaId: string) => {
+    if (!onStartPatrol) return;
+
+    setIsStartingPatrol(true);
+    try {
+      await onStartPatrol(vehicle.id, areaId);
+    } finally {
+      // Warte kurz bevor Loading-State entfernt wird (für visuelles Feedback)
+      setTimeout(() => {
+        setIsStartingPatrol(false);
+      }, 300);
+    }
   };
 
   return (
@@ -145,8 +174,61 @@ const VehicleDetails: React.FC<VehicleDetailsProps> = ({
           </div>
         )}
 
+        {/* 🚔 PATROL BUTTONS */}
+        {/* Start Patrol Button - nur wenn Fahrzeug S1 oder S2 und NICHT auf Streife */}
+        {!vehicle.isOnPatrol && (vehicle.status === 'S1' || vehicle.status === 'S2') && onStartPatrol && (
+          <button
+            className={`patrol-btn patrol-start-btn ${isStartingPatrol ? 'loading' : ''}`}
+            onClick={handleOpenPatrolSelector}
+            title="Streifengebiet auswählen und Streifenfahrt starten"
+            disabled={vehicle.fuelLevel < 40 || vehicle.crewFatigue > 70 || isStartingPatrol}
+          >
+            {isStartingPatrol ? (
+              <>
+                <span className="spinner"></span>
+                Route wird berechnet...
+              </>
+            ) : (
+              <>
+                🚔 Streife starten
+              </>
+            )}
+          </button>
+        )}
+
+        {/* Stop Patrol Button - nur wenn Fahrzeug auf Streife */}
+        {vehicle.isOnPatrol && onStopPatrol && (
+          <button
+            className="patrol-btn patrol-stop-btn"
+            onClick={() => onStopPatrol(vehicle.id)}
+            title="Streifenfahrt beenden"
+          >
+            ⏸️ Streife beenden
+          </button>
+        )}
+
+        {/* Patrol Info - wenn auf Streife */}
+        {vehicle.isOnPatrol && vehicle.patrolRoute && (
+          <div className="patrol-info">
+            <div className="patrol-info-row">
+              <span className="patrol-info-label">Gebiet:</span>
+              <span className="patrol-info-value">{vehicle.patrolRoute.areaName}</span>
+            </div>
+            <div className="patrol-info-row">
+              <span className="patrol-info-label">Waypoint:</span>
+              <span className="patrol-info-value">
+                {vehicle.patrolRoute.currentWaypointIndex + 1}/{vehicle.patrolRoute.waypoints.length}
+              </span>
+            </div>
+            <div className="patrol-info-row">
+              <span className="patrol-info-label">Distanz:</span>
+              <span className="patrol-info-value">{vehicle.patrolTotalDistance.toFixed(1)} km</span>
+            </div>
+          </div>
+        )}
+
         {/* Shift Change Button */}
-        {vehicle.crewFatigue > 60 && vehicle.status === 'S1' && (
+        {vehicle.crewFatigue > 60 && (vehicle.status === 'S1' || vehicle.status === 'S2') && (
           <button
             className="shift-change-btn"
             onClick={handleShiftChange}
@@ -156,6 +238,15 @@ const VehicleDetails: React.FC<VehicleDetailsProps> = ({
           </button>
         )}
       </div>
+
+      {/* 🚔 PATROL AREA SELECTOR MODAL */}
+      <PatrolAreaSelector
+        isOpen={isPatrolSelectorOpen}
+        onClose={() => setIsPatrolSelectorOpen(false)}
+        onSelectArea={handlePatrolAreaSelected}
+        vehicleCallsign={vehicle.callsign || `FZ-${vehicle.id}`}
+        currentHour={Math.floor(gameTime / 60)}
+      />
     </div>
   );
 };

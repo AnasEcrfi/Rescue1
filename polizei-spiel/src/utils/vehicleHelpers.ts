@@ -14,10 +14,10 @@ export const isVehicleMoving = (vehicle: Vehicle): boolean => {
 /**
  * Prüft ob Fahrzeug verfügbar für Zuweisung ist
  * @param vehicle - Fahrzeug-Objekt
- * @returns true wenn in S2 oder S8 mit canBeRedirected
+ * @returns true wenn in S1 (Streife), S2 (Wache) oder S8 (Rückfahrt mit canBeRedirected)
  */
 export const isVehicleAvailable = (vehicle: Vehicle): boolean => {
-  return vehicle.status === 'S2' || (vehicle.status === 'S8' && vehicle.canBeRedirected);
+  return vehicle.status === 'S1' || vehicle.status === 'S2' || (vehicle.status === 'S8' && vehicle.canBeRedirected);
 };
 
 /**

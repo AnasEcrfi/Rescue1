@@ -24,10 +24,10 @@ import { incidentReports, getRandomReport, hasBackupRequest, getBackupRequest } 
 import CallModal from './components/CallModal';
 import BackupModal from './components/BackupModal';
 import SpeakRequestModal from './components/SpeakRequestModal';
+import PatrolAreaSelector from './components/PatrolAreaSelector';
 import GameSettings from './components/GameSettings';
 import ProtocolPanel from './components/ProtocolPanel';
 import { CompactErrorBoundary } from './components/ErrorBoundary';
-import { CompactErrorFallback } from './components/ErrorFallback';
 import { protocolLogger } from './utils/protocolLogger';
 import type { ProtocolEntry } from './types/protocol';
 import WeatherDisplay from './components/WeatherDisplay';
@@ -38,6 +38,7 @@ import { shouldTriggerMANV, getRandomMANVScenario, generateInvolvedCount } from 
 import RadioLog, { type RadioMessage } from './components/RadioLog';
 import { generateRadioMessage } from './constants/radioMessages';
 import { gasStations as fallbackGasStations } from './constants/gasStations';
+import { dialogTemplates } from './constants/dialogTemplates';
 import { fetchGasStationsFromOSM, fetchPoliceStationsFromOSM } from './services/overpassService';
 import { policeStations as fallbackPoliceStations } from './constants/locations';
 import { getAutoAssignmentRecommendations } from './utils/smartAssignment';
@@ -47,6 +48,7 @@ import { useHotkeys } from './hooks/useHotkeys';
 import VehicleDetails from './components/VehicleDetails';
 import { generateFrankfurtCallsign } from './utils/callsigns';
 import { calculateDispatchDelay } from './constants/dispatchTimes';
+import { REFUEL_COST, REPAIR_COST_MIN, REPAIR_COST_MAX, CREW_BREAK_COST, SHIFT_CHANGE_COST } from './constants/gameplayConstants';
 import { getDisplayPosition } from './utils/vehiclePositioning';
 // NEUE HELPER-IMPORTS (Zentralisierung)
 import { formatGameTime, getHoursAndMinutes } from './utils/timeHelpers';
@@ -56,6 +58,9 @@ import { getIncidentById, getIncidentPriorityText, needsMoreVehicles } from './u
 // 🎮 ZUSTAND STORE IMPORT (Zentrale State Management Migration)
 import { useGameStore } from './stores/gameStore';
 import type { Difficulty } from './types/game';
+// 🚔 PATROL SYSTEM IMPORTS
+import type { PatrolRoute, PatrolDiscovery } from './types/patrol';
+import { startPatrol, stopPatrol, updatePatrolMovement, checkForDiscovery, calculatePresenceBonus, applyPresenceBonusToSpawnChance, calculatePatrolFuelConsumption, calculatePatrolFatigue, canVehiclePatrol } from './utils/patrolManager';
 
 // Fix Leaflet default marker icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -261,8 +266,10 @@ const VehicleMarker: React.FC<VehicleMarkerProps> = ({ position, status, vehicle
       if (onHoverEnd) onHoverEnd();
     };
 
-    const handleClick = () => {
-      if (onClick) onClick();
+    const handleClick = (e?: Event) => {
+      if (onClick) {
+        onClick();
+      }
     };
 
     // Leaflet-Events für den Marker
@@ -271,11 +278,11 @@ const VehicleMarker: React.FC<VehicleMarkerProps> = ({ position, status, vehicle
     marker.on('click', handleClick);
 
     // Zusätzlich: DOM-Events direkt auf das Icon-Element binden (zuverlässiger!)
-    // Das behebt das Problem, dass mouseout manchmal nicht ausgelöst wird
     const iconElement = marker.getElement();
     if (iconElement) {
       iconElement.addEventListener('mouseenter', handleMouseOver);
       iconElement.addEventListener('mouseleave', handleMouseOut);
+      iconElement.addEventListener('click', handleClick);
     }
 
     return () => {
@@ -287,9 +294,10 @@ const VehicleMarker: React.FC<VehicleMarkerProps> = ({ position, status, vehicle
       if (iconElement) {
         iconElement.removeEventListener('mouseenter', handleMouseOver);
         iconElement.removeEventListener('mouseleave', handleMouseOut);
+        iconElement.removeEventListener('click', handleClick);
       }
     };
-  }, [onHover, onHoverEnd, onClick]);
+  }, [vehicle.id]); // ✅ NUR vehicle.id als Dependency!
 
   return (
     <Marker ref={markerRef} position={position} icon={icon}>
@@ -535,6 +543,29 @@ function App() {
   const [hoveredVehicleId, setHoveredVehicleId] = useState<number | null>(null);
   const [vehicleFilter, setVehicleFilter] = useState<VehicleStatus | 'all'>('all');
   const [incidentFilter, setIncidentFilter] = useState<'all' | 'active' | 'completed' | 'failed'>('all');
+  const [patrolModalVehicleId, setPatrolModalVehicleId] = useState<number | null>(null);
+
+  // 🎯 Auto-Scroll zum ausgewählten Fahrzeug in der Liste + Details
+  useEffect(() => {
+    if (selectedVehicleId !== null) {
+      // Warte kurz, damit das DOM aktualisiert wird
+      setTimeout(() => {
+        // Scrolle zuerst zum Fahrzeug in der Liste
+        const listElement = document.getElementById(`vehicle-list-item-${selectedVehicleId}`);
+        if (listElement) {
+          listElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // Dann scrolle auch zur VehicleDetails-Komponente (falls sie außerhalb ist)
+        setTimeout(() => {
+          const detailsElement = document.querySelector('.vehicle-details-panel');
+          if (detailsElement) {
+            detailsElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        }, 300); // Kurze Verzögerung für smoothes Scrolling
+      }, 50);
+    }
+  }, [selectedVehicleId]);
   const [showGameSettings, setShowGameSettings] = useState(false);
 
   // Map Legende - Toggle für Icons
@@ -922,9 +953,29 @@ function App() {
         }
       }
     },
+    // 🚔 PATROL HOTKEY
+    onTogglePatrol: () => {
+      if (selectedVehicleId) {
+        const vehicle = vehicles.find(v => v.id === selectedVehicleId);
+        if (!vehicle) return;
+
+        if (vehicle.isOnPatrol) {
+          // Stop patrol
+          handleStopPatrol(selectedVehicleId);
+          addLog(`🎮 HOTKEY: Streife beendet für Fahrzeug ${selectedVehicleId}`, 'system');
+        } else if (vehicle.status === 'S1' || vehicle.status === 'S2') {
+          // Start patrol
+          handleStartPatrol(selectedVehicleId);
+          addLog(`🎮 HOTKEY: Streife gestartet für Fahrzeug ${selectedVehicleId}`, 'system');
+        } else {
+          addLog(`⚠️ Fahrzeug ${selectedVehicleId}: Nur im Status S1/S2 kann Streife gestartet werden`, 'system');
+        }
+      }
+    },
   }, gameStarted);
 
   // Get difficulty settings (lstsim.de style - realistic balance)
+  // 🎮 Phase 4: Verwendet jetzt gameplayConstants für besseres Balancing
   const getDifficultySettings = () => {
     switch (difficulty) {
       case 'Leicht':
@@ -932,24 +983,42 @@ function App() {
           vehicleCount: 6,
           vehicleTypes: ['Streifenwagen', 'Streifenwagen', 'Streifenwagen', 'Streifenwagen', 'SEK', 'Zivilfahrzeug'] as VehicleType[],
           incidentsPerHour: 2.0,  // 2.0 Einsätze pro Stunde (Basis, wird durch Tageszeit modifiziert)
-          maxIncidents: 4,  // Erhöht für Realismus
+          maxIncidents: 4,
           baseTimeLimit: 90,
+          // Multiplikatoren aus gameplayConstants
+          incidentFrequencyMultiplier: 0.7,  // 30% weniger Einsätze
+          escalationChance: 0.05,            // 5% Eskalations-Chance
+          crewFatigueRate: 0.7,              // 30% langsamer müde
+          fuelConsumptionRate: 0.9,          // 10% weniger Verbrauch
+          backupRequestChance: 0.1,          // 10% Verstärkung
         };
       case 'Schwer':
         return {
           vehicleCount: 4,
           vehicleTypes: ['Streifenwagen', 'Streifenwagen', 'SEK', 'Polizeihubschrauber'] as VehicleType[],
           incidentsPerHour: 4.5,  // 4.5 Einsätze pro Stunde (Basis, wird durch Tageszeit modifiziert)
-          maxIncidents: 7,  // Erhöht für echte Herausforderung
+          maxIncidents: 7,
           baseTimeLimit: 45,
+          // Multiplikatoren aus gameplayConstants
+          incidentFrequencyMultiplier: 1.3,  // 30% mehr Einsätze
+          escalationChance: 0.2,             // 20% Eskalations-Chance
+          crewFatigueRate: 1.3,              // 30% schneller müde
+          fuelConsumptionRate: 1.2,          // 20% mehr Verbrauch
+          backupRequestChance: 0.25,         // 25% Verstärkung
         };
       default: // Mittel
         return {
           vehicleCount: 5,
           vehicleTypes: ['Streifenwagen', 'Streifenwagen', 'Streifenwagen', 'SEK', 'Zivilfahrzeug'] as VehicleType[],
           incidentsPerHour: 3.0,  // 3.0 Einsätze pro Stunde (Basis, wird durch Tageszeit modifiziert)
-          maxIncidents: 5,  // Erhöht für Realismus
+          maxIncidents: 5,
           baseTimeLimit: 60,
+          // Multiplikatoren aus gameplayConstants
+          incidentFrequencyMultiplier: 1.0,  // Normale Frequenz
+          escalationChance: 0.1,             // 10% Eskalations-Chance
+          crewFatigueRate: 1.0,              // Normale Müdigkeit
+          fuelConsumptionRate: 1.0,          // Normaler Verbrauch
+          backupRequestChance: 0.15,         // 15% Verstärkung
         };
     }
   };
@@ -1007,6 +1076,12 @@ function App() {
         lastBreakTime: 0,
         shiftStartTime: gameTime,
         accumulatedTime: 0,
+        // 🚔 PATROL SYSTEM
+        isOnPatrol: false,
+        patrolRoute: null,
+        patrolStartTime: null,
+        patrolTotalDistance: 0,
+        patrolLastDiscoveryCheck: 0,
       });
     }
 
@@ -1037,6 +1112,21 @@ function App() {
   const generateCall = () => {
     const hour = Math.floor(gameTime / 60);
 
+    // 🚔 PRÄSENZ-BONUS: Mehr Streifen = weniger Kriminalität
+    // Zähle aktive Streifen
+    const activePatrolCount = vehicles.filter(v => v.isOnPatrol && v.patrolRoute).length;
+    const presenceBonus = calculatePresenceBonus(activePatrolCount);
+
+    // Prüfe ob Call durch Präsenz verhindert wird
+    if (presenceBonus > 0 && Math.random() < presenceBonus) {
+      // Call wurde durch Streifenpräsenz verhindert!
+      // Log nur bei signifikantem Bonus (>= 10%)
+      if (presenceBonus >= 0.1 && Math.random() < 0.1) { // 10% Chance auf Log
+        addLog(`🚔 Streifenpräsenz wirkt: Vorfall verhindert durch ${activePatrolCount} Streife(n)`, 'system');
+      }
+      return; // Kein Call generieren
+    }
+
     // 🎲 ERHÖHTE ZUFÄLLIGKEIT: Manchmal ignoriere Tageszeit-Gewichtung
     const ignoreTimeWeighting = Math.random() < 0.3; // 30% komplett zufällig
 
@@ -1065,8 +1155,9 @@ function App() {
       incidentType = incidentTypes[Math.floor(Math.random() * incidentTypes.length)];
 
     } else {
-      // Tageszeit-gewichteter Einsatz
-      incidentType = getWeightedIncidentType(hour);
+      // Tageszeit-gewichteter Einsatz (inkl. Wetter-Modifikatoren)
+      // 🌦️ BUG FIX: Wetter als Parameter übergeben
+      incidentType = getWeightedIncidentType(hour, weather.current);
 
     }
 
@@ -1118,28 +1209,86 @@ function App() {
     const address = getAddressForLocation(location.name, isPrivateAddress);
 
     const newCallId = incrementCallCounter();
-    const newCall = {
-      id: newCallId,
-      type: incidentType.type,
-      position: location.position as [number, number],
-      priority: incidentType.priority as 'low' | 'medium' | 'high',
-      description: incidentType.description,
-      locationName: location.name,
-      timestamp: Date.now(),
-      answered: false,
-      // NEU: LST SIM Style Eigenschaften
-      callerText: isMANV
-        ? `GROSSLAGE! ${manvScenario!.type} mit ca. ${involvedCount} Beteiligten! Sofort mehrere Einheiten entsenden!`
-        : callerText,
-      callerType: isMANV ? 'witness' : callerType,
-      callerName,
-      callbackNumber: hasCallbackNumber ? generateCallbackNumber() : undefined,
-      address, // Echte Adresse
-      status: 'waiting' as const,
-      // ⚡ MANV-Daten
-      isMANV,
-      involvedCount: isMANV ? involvedCount : undefined,
-    };
+
+    // 🎮 DIALOG-SYSTEM: Prüfe ob Dialog-Template existiert (100% Chance zum Testen)
+    const hasDialogTemplate = !isMANV && dialogTemplates[incidentType.type];
+    const useDialogMode = hasDialogTemplate && Math.random() < 1.0; // 100% zum Testen - später auf 0.5 ändern
+
+    let newCall: Call;
+
+    if (useDialogMode && hasDialogTemplate) {
+      // 🎭 DIALOG-MODUS: Erstelle interaktiven Call
+      const template = dialogTemplates[incidentType.type];
+      const initialMessage = {
+        id: `msg-${Date.now()}-caller-initial`,
+        sender: 'caller' as const,
+        text: template.initialMessage.text,
+        timestamp: Date.now(),
+        emotion: template.initialMessage.emotion as any,
+      };
+
+      newCall = {
+        id: newCallId,
+        type: incidentType.type,
+        position: [50.1109, 8.6821] as [number, number], // Dummy-Position (Frankfurt Zentrum)
+        priority: 'medium' as 'low' | 'medium' | 'high', // Wird später enthüllt
+        description: incidentType.description,
+        locationName: '???', // Versteckt bis enthüllt
+        timestamp: Date.now(),
+        answered: false,
+        callerText: template.initialMessage.text,
+        callerType: template.callerProfile.type as any,
+        callerName: template.callerProfile.name,
+        callbackNumber: hasCallbackNumber ? generateCallbackNumber() : undefined,
+        address: '???', // Versteckt bis enthüllt
+        status: 'waiting' as const,
+        isMANV: false,
+        // 🎭 DIALOG STATE
+        dialogState: {
+          isActive: true,
+          messagesHistory: [initialMessage],
+          currentOptions: template.initialOptions,
+          revealedInfo: {
+            hasLocation: false,
+            hasIncidentType: false,
+            hasPriority: false,
+            hasDescription: false,
+          },
+          isComplete: false,
+        },
+        // 🔒 VERSTECKTE DATEN (werden schrittweise enthüllt)
+        hiddenData: {
+          actualPosition: location.position as [number, number],
+          actualLocation: location.name,
+          actualAddress: address,
+          actualType: incidentType.type,
+          actualPriority: incidentType.priority as 'low' | 'medium' | 'high',
+          actualDescription: incidentType.description,
+        },
+      };
+    } else {
+      // 📞 NORMALER MODUS: Standard-Call wie bisher
+      newCall = {
+        id: newCallId,
+        type: incidentType.type,
+        position: location.position as [number, number],
+        priority: incidentType.priority as 'low' | 'medium' | 'high',
+        description: incidentType.description,
+        locationName: location.name,
+        timestamp: Date.now(),
+        answered: false,
+        callerText: isMANV
+          ? `GROSSLAGE! ${manvScenario!.type} mit ca. ${involvedCount} Beteiligten! Sofort mehrere Einheiten entsenden!`
+          : callerText,
+        callerType: isMANV ? 'witness' : callerType,
+        callerName,
+        callbackNumber: hasCallbackNumber ? generateCallbackNumber() : undefined,
+        address,
+        status: 'waiting' as const,
+        isMANV,
+        involvedCount: isMANV ? involvedCount : undefined,
+      };
+    }
 
     addCall(newCall);
 
@@ -1156,11 +1305,11 @@ function App() {
     setToastCounter((prev) => prev + 1);
 
     if (incidentType.priority === 'high') {
-      // ⚠️ Authentischer Quattrone-Alarm für kritische Einsätze (leiser)
+      // ⚠️ Authentischer Quattrone-Alarm für kritische Einsätze (sehr leise)
       realisticSoundManager.playNewIncidentAlert();
     } else {
-      // Doppelton für normale Einsätze (deutlich leiser: 0.4 statt 0.6)
-      realisticSoundManager.playDoubleToneAlert(0.4);
+      // Doppelton für normale Einsätze (sehr leise: 0.12)
+      realisticSoundManager.playDoubleToneAlert(0.12);
     }
 
     addLog(`Notruf eingehend: ${incidentType.type} in ${location.name}`, 'new');
@@ -1188,6 +1337,155 @@ function App() {
     setTimeout(() => {
       setCalls(prev => prev.filter(c => c.id !== callId));
     }, 3000 / gameSpeed);
+  };
+
+  // Dialog-Handler: Frage stellen und Antwort verarbeiten
+  const handleDialogResponse = (callId: number, optionId: string) => {
+    const call = calls.find(c => c.id === callId);
+    if (!call || !call.dialogState || !call.type) return;
+
+    const template = dialogTemplates[call.type];
+    if (!template) return;
+
+    const option = template.dialogTree[optionId];
+    if (!option) return;
+
+    const now = Date.now();
+
+    // Füge Dispatcher-Frage hinzu
+    const dispatcherMessage = {
+      id: `msg-${now}-dispatcher`,
+      sender: 'dispatcher' as const,
+      text: option.text,
+      timestamp: now,
+    };
+
+    // Füge Anrufer-Antwort hinzu (mit Platzhaltern ersetzt)
+    let responseText = option.response;
+    if (call.hiddenData?.actualAddress) {
+      responseText = responseText.replace('{ADDRESS}', call.hiddenData.actualAddress);
+    }
+    if (call.hiddenData?.actualLocation) {
+      responseText = responseText.replace('{LOCATION}', call.hiddenData.actualLocation);
+      responseText = responseText.replace('{POI_NAME}', call.hiddenData.actualLocation);
+    }
+
+    // Berechne realistische Verzögerung basierend auf Textlänge
+    const typingSpeed = call.priority === 'high' ? 25 : call.priority === 'medium' ? 35 : 50;
+    const estimatedTypingTime = responseText.length * typingSpeed;
+
+    const callerMessage = {
+      id: `msg-${now}-caller`,
+      sender: 'caller' as const,
+      text: responseText,
+      timestamp: now + 800, // Realistischere Verzögerung (Anrufer überlegt/atmet)
+      emotion: option.responseEmotion,
+    };
+
+    // Bestimme nächste verfügbare Optionen
+    const nextOptions = option.followUpOptions || [];
+
+    // Update revealed info - aber OHNE location/priority (die werden verzögert)
+    const immediateRevealedInfo = { ...call.dialogState.revealedInfo };
+    if (option.revealsInfo) {
+      if (option.revealsInfo.incidentType) {
+        immediateRevealedInfo.hasIncidentType = true;
+      }
+      // location und priority werden NICHT sofort revealed!
+    }
+
+    // Prüfe ob Dialog komplett ist (wird später korrekt aktualisiert)
+    const isComplete = option.completesDialog || false;
+
+    // SCHRITT 1: Füge NUR die Dispatcher-Frage hinzu (sofort)
+    setCalls(prev => prev.map(c => {
+      if (c.id !== callId) return c;
+
+      const updatedCall: Call = { ...c };
+
+      // Füge NUR Dispatcher-Nachricht hinzu
+      updatedCall.dialogState = {
+        ...c.dialogState!,
+        messagesHistory: [...c.dialogState!.messagesHistory, dispatcherMessage],
+        currentOptions: [], // Keine Buttons während Anrufer antwortet
+        revealedInfo: immediateRevealedInfo,
+        isComplete,
+      };
+
+      return updatedCall;
+    }));
+
+    // SCHRITT 2: Füge Caller-Antwort nach Verzögerung hinzu
+    setTimeout(() => {
+      setCalls(prev => prev.map(c => {
+        if (c.id !== callId) return c;
+
+        const updatedCall: Call = { ...c };
+
+        if (updatedCall.dialogState) {
+          updatedCall.dialogState = {
+            ...updatedCall.dialogState,
+            messagesHistory: [...updatedCall.dialogState.messagesHistory, callerMessage],
+            currentOptions: nextOptions, // Buttons erscheinen nach Antwort
+          };
+        }
+
+        return updatedCall;
+      }));
+    }, 800); // Anrufer denkt nach
+
+    // Verzögert die Daten-Enthüllung bis NACH der Typing-Animation
+    if (option.revealsInfo?.location || option.revealsInfo?.priority || option.revealsInfo?.additionalDetails || option.revealsInfo?.involvedCount !== undefined) {
+      setTimeout(() => {
+        setCalls(prev => prev.map(c => {
+          if (c.id !== callId) return c;
+
+          const updatedCall: Call = { ...c };
+
+          // JETZT enthülle die tatsächlichen Daten
+          if (option.revealsInfo?.location && c.hiddenData) {
+            updatedCall.position = c.hiddenData.actualPosition!;
+            updatedCall.locationName = c.hiddenData.actualLocation!;
+            updatedCall.address = c.hiddenData.actualAddress!;
+          }
+          if (option.revealsInfo?.priority && option.revealsInfo.priority) {
+            updatedCall.priority = option.revealsInfo.priority;
+          }
+          if (option.revealsInfo?.additionalDetails) {
+            updatedCall.description += ` ${option.revealsInfo.additionalDetails}`;
+          }
+          if (option.revealsInfo?.involvedCount !== undefined) {
+            updatedCall.involvedCount = option.revealsInfo.involvedCount;
+          }
+
+          // JETZT auch revealedInfo aktualisieren
+          if (updatedCall.dialogState) {
+            const finalRevealedInfo = { ...updatedCall.dialogState.revealedInfo };
+            if (option.revealsInfo?.location) {
+              finalRevealedInfo.hasLocation = true;
+            }
+            if (option.revealsInfo?.priority) {
+              finalRevealedInfo.hasPriority = true;
+            }
+
+            // Prüfe ob Dialog jetzt komplett ist
+            const nowComplete = option.completesDialog || (
+              finalRevealedInfo.hasLocation &&
+              finalRevealedInfo.hasIncidentType &&
+              finalRevealedInfo.hasPriority
+            );
+
+            updatedCall.dialogState = {
+              ...updatedCall.dialogState,
+              revealedInfo: finalRevealedInfo,
+              isComplete: nowComplete,
+            };
+          }
+
+          return updatedCall;
+        }));
+      }, estimatedTypingTime + 800); // Warte bis Typing fertig ist + Initial-Delay
+    }
   };
 
   // NEW: Accept call and create incident (nur noch aus Modal heraus aufrufbar)
@@ -1562,6 +1860,70 @@ function App() {
     setSelectedIncidentForBackup(null);
   };
 
+  // 🚔 PATROL SYSTEM: Start patrol for vehicle
+  const handleStartPatrol = async (vehicleId: number, areaId?: string) => {
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    if (!vehicle) return;
+
+    // Prüfe ob Fahrzeug auf Streife gehen kann
+    const canPatrolCheck = canVehiclePatrol(vehicle);
+    if (!canPatrolCheck.canPatrol) {
+      addLog(`⚠️ ${vehicle.callsign || `FZ-${vehicle.id}`} kann nicht auf Streife: ${canPatrolCheck.reason}`, 'system');
+      return;
+    }
+
+    // ⚡ Sofortiges Feedback: Markiere Fahrzeug als "Route wird berechnet"
+    addLog(`🚔 ${vehicle.callsign || `FZ-${vehicle.id}`} berechnet Streifenroute...`, 'system');
+    realisticSoundManager.playLeitstelleButtonBeep(0.4);
+
+    // Streife starten (async, blockiert nicht UI)
+    const hour = Math.floor(gameTime / 60);
+    const result = await startPatrol(vehicle, Date.now(), hour, weather.current, undefined, areaId);
+
+    if (!result.success || !result.route) {
+      addLog(`⚠️ Streife konnte nicht gestartet werden: ${result.error}`, 'system');
+      return;
+    }
+
+    // Update vehicle mit berechneter Route
+    setVehicles(prev => prev.map(v =>
+      v.id === vehicleId ? {
+        ...v,
+        isOnPatrol: true,
+        patrolRoute: result.route,
+        patrolStartTime: Date.now(),
+        patrolTotalDistance: 0,
+        patrolLastDiscoveryCheck: Date.now(),
+        position: result.route.fullRoute[0], // ✅ FIX: Starte bei erstem Punkt der Route
+        status: 'S1' as VehicleStatus, // S1 = Frei auf Funk (auf Streife)
+      } : v
+    ));
+
+    addLog(`✅ ${vehicle.callsign || `FZ-${vehicle.id}`} beginnt Streife in ${result.route.areaName} (${result.route.fullRoute.length} Routenpunkte)`, 'assignment');
+  };
+
+  // 🚔 PATROL SYSTEM: Stop patrol for vehicle
+  const handleStopPatrol = (vehicleId: number) => {
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    if (!vehicle || !vehicle.isOnPatrol) return;
+
+    // Streife stoppen
+    stopPatrol(vehicle);
+
+    setVehicles(prev => prev.map(v =>
+      v.id === vehicleId ? {
+        ...v,
+        isOnPatrol: false,
+        patrolRoute: null,
+        patrolStartTime: null,
+        status: 'S2' as VehicleStatus, // Zurück zur Wache
+      } : v
+    ));
+
+    addLog(`🚔 ${vehicle.callsign || `FZ-${vehicle.id}`} beendet Streife`, 'system');
+    realisticSoundManager.playLeitstelleButtonBeep(0.4);
+  };
+
   // Return vehicle to station (für Hotkey H)
   const returnToStation = async (vehicleId: number) => {
     const vehicle = vehicles.find(v => v.id === vehicleId);
@@ -1589,7 +1951,8 @@ function App() {
         routeDistance,
         weather.current,
         vehicle.crewFatigue,
-        false // Rückfahrt ohne Blaulicht
+        false, // Rückfahrt ohne Blaulicht
+        gameSpeed // 🎮 BUG FIX: gameSpeed berücksichtigen
       );
 
       setVehicles(prev => prev.map(v =>
@@ -1740,7 +2103,8 @@ function App() {
           routeDistance,
           weather.current,
           safeVehicle!.crewFatigue,
-          safeIncident!.priority === 'high' // Nur bei High-Priority mit Blaulicht
+          safeIncident!.priority === 'high', // Nur bei High-Priority mit Blaulicht
+          gameSpeed // 🎮 BUG FIX: gameSpeed berücksichtigen
         );
       } catch (error) {
         console.error('Routing Fehler:', error);
@@ -1878,6 +2242,24 @@ function App() {
             if (gameTime >= vehicle.outOfServiceUntil) {
               // S6 → S2: Zurück im Dienst (an Wache)
               const updates = resetVehicleAfterService(vehicle, vehicle.outOfServiceReason || 'unknown');
+
+              // 🎮 Phase 5: Realismus - Kosten für S6-Services
+              let serviceCost = 0;
+              const reason = vehicle.outOfServiceReason;
+              if (reason === 'Tanken') {
+                serviceCost = REFUEL_COST;
+              } else if (reason === 'Reparatur') {
+                serviceCost = REPAIR_COST_MIN + Math.floor(Math.random() * (REPAIR_COST_MAX - REPAIR_COST_MIN));
+              } else if (reason === 'Crew-Pause') {
+                serviceCost = CREW_BREAK_COST;
+              } else if (reason === 'Schichtende') {
+                serviceCost = SHIFT_CHANGE_COST;
+              }
+
+              if (serviceCost > 0) {
+                setScore(s => Math.max(0, s - serviceCost));
+                addLog(`💰 ${reason} Kosten: -${serviceCost} Punkte`, 'system');
+              }
 
               addLog(`S-${vehicle.id.toString().padStart(2, '0')} S6→S2 ${vehicle.outOfServiceReason} abgeschlossen`, 'completion');
 
@@ -2191,9 +2573,20 @@ function App() {
 
               // ⚡ REALISTISCHE TIMINGS: Verbrauch berechnen
               const distanceKm = routeDistance / 1000; // Meter → Kilometer
-              const fuelConsumed = calculateFuelConsumption(vehicle, distanceKm);
               const timeDrivenHours = vehicle.routeDuration / 3600; // Sekunden → Stunden
-              const fatigueGained = calculateCrewFatigue(vehicle, timeDrivenHours);
+              // 🚁 BUG FIX: Übergebe durationHours für Hubschrauber
+              // 🎮 Phase 4: Schwierigkeitsgrad-Multiplikatoren anwenden
+              const fuelConsumed = calculateFuelConsumption(
+                vehicle,
+                distanceKm,
+                timeDrivenHours,
+                settings.fuelConsumptionRate
+              );
+              const fatigueGained = calculateCrewFatigue(
+                vehicle,
+                timeDrivenHours,
+                settings.crewFatigueRate
+              );
               const newFuelLevel = Math.max(0, vehicle.fuelLevel - fuelConsumed);
               const newFatigue = Math.min(100, vehicle.crewFatigue + fatigueGained);
               const newMaintenance = updateMaintenanceStatus(vehicle, distanceKm);
@@ -2235,7 +2628,8 @@ function App() {
                     distanceToGasStation,
                     weather.current,
                     updatedVehicle.crewFatigue,
-                    false // Keine Sonderrechte beim Tanken
+                    false, // Keine Sonderrechte beim Tanken
+                    gameSpeed // 🎮 BUG FIX: gameSpeed berücksichtigen
                   );
 
                   return {
@@ -2574,7 +2968,14 @@ function App() {
           if (incident.arrivedVehicles >= incident.requiredVehicles) {
             // KRITISCHER BUGFIX (lstsim.de Style): Einsatz ist ERST abgeschlossen wenn ALLE Fahrzeuge in S8 sind!
             const incidentVehicles = vehicles.filter(v => v.assignedIncidentId === incident.id);
-            const allReturning = incidentVehicles.every(v => v.status === 'S8');
+
+            // 🔒 DEADLOCK-FIX: S5-Fahrzeuge (Sprechwunsch) als "returning" betrachten
+            // Wenn ein Fahrzeug S5 ist, aber previousStatus = 'S4' hat, würde es nach Bestätigung
+            // automatisch zu S8 wechseln. Das darf den Einsatzabschluss nicht blockieren.
+            const allReturning = incidentVehicles.every(v =>
+              v.status === 'S8' ||
+              (v.status === 'S5' && v.previousStatus === 'S4') // S5 von S4 aus = wird zu S8
+            );
 
             if (allReturning && incidentVehicles.length > 0) {
               // All vehicles are returning - mark as completed (Option A)
@@ -2813,6 +3214,171 @@ function App() {
       clearInterval(interval);
     };
   }, [gameStarted, gameSpeed, isPaused]);
+
+  // 🚔 PATROL SYSTEM: Update patrol movement and check for discoveries
+  useEffect(() => {
+    if (!gameStarted || isPaused) return;
+
+    // Performance-Check: Nur laufen wenn Fahrzeuge auf Streife sind
+    const hasPatrollingVehicles = vehicles.some(v => v.isOnPatrol && v.patrolRoute);
+    if (!hasPatrollingVehicles) return;
+
+    const hour = Math.floor(gameTime / 60);
+    const now = Date.now();
+
+    // Update interval: 100ms für flüssige Bewegung
+    const interval = setInterval(() => {
+      setVehicles(prev =>
+        prev.map(vehicle => {
+          // Nur Fahrzeuge auf Streife updaten
+          if (!vehicle.isOnPatrol || !vehicle.patrolRoute) return vehicle;
+
+          const route = vehicle.patrolRoute;
+          const deltaTime = 0.1 * gameSpeed; // 100ms in Sekunden, angepasst an gameSpeed
+
+          // Update movement
+          const movement = updatePatrolMovement(vehicle, route, deltaTime, gameSpeed);
+
+          // Route completed?
+          if (movement.routeCompleted) {
+            // 🎲 RANDOM PATROL: Generiere neue Route statt Streife zu beenden!
+            console.log(`[PATROL] ${vehicle.callsign} beendet Route, generiere neue...`);
+
+            // Generiere asynchron neue Route (non-blocking)
+            (async () => {
+              try {
+                const newRouteResult = await startPatrol(
+                  vehicle,
+                  gameTime,
+                  hour,
+                  weather.current,
+                  'random' // ✅ Immer Random-Patrol für Abwechslung!
+                );
+
+                if (newRouteResult.success && newRouteResult.route) {
+                  // Update Vehicle mit neuer Route
+                  setVehicles(prev => prev.map(v => {
+                    if (v.id === vehicle.id) {
+                      return {
+                        ...v,
+                        patrolRoute: newRouteResult.route,
+                        patrolTotalDistance: v.patrolTotalDistance || 0, // Distanz beibehalten
+                      };
+                    }
+                    return v;
+                  }));
+
+                  addLog(`🎲 ${vehicle.callsign || `FZ-${vehicle.id}`} fährt neue Streifenroute in ${newRouteResult.route.areaName}`, 'system');
+                } else {
+                  // Fehler bei Route-Generierung → Streife beenden
+                  console.warn(`[PATROL] Neue Route konnte nicht generiert werden: ${newRouteResult.error}`);
+                  setVehicles(prev => prev.map(v => {
+                    if (v.id === vehicle.id) {
+                      return {
+                        ...v,
+                        isOnPatrol: false,
+                        patrolRoute: null,
+                        patrolStartTime: null,
+                      };
+                    }
+                    return v;
+                  }));
+                  addLog(`${vehicle.callsign || `FZ-${vehicle.id}`} beendet Streife (keine neue Route verfügbar)`, 'system');
+                }
+              } catch (error) {
+                console.error('[PATROL] Fehler bei neuer Route:', error);
+              }
+            })();
+
+            // Fahrzeug bleibt auf Streife, aber pausiert kurz während neue Route geladen wird
+            return vehicle;
+          }
+
+          // Check for discovery (nur alle 60 Sekunden)
+          let discovery: PatrolDiscovery | null = null;
+          if (now - vehicle.patrolLastDiscoveryCheck > 60000) {
+            discovery = checkForDiscovery(vehicle, route, hour, now, vehicle.patrolLastDiscoveryCheck);
+          }
+
+          // Discovery gefunden? -> Erstelle Call
+          if (discovery) {
+            // Generiere neuen Call aus Discovery
+            const newCall: Call = {
+              id: Date.now(),
+              type: discovery.type,
+              position: discovery.position,
+              priority: discovery.priority,
+              description: discovery.description,
+              locationName: route.areaName,
+              timestamp: Date.now(),
+              answered: false,
+              callerType: discovery.discoveryMethod === 'witness' ? 'Zeuge' : 'Beobachtung',
+              callerText: discovery.description,
+              status: 'waiting',
+            };
+
+            setCalls(prevCalls => [...prevCalls, newCall]);
+
+            // 📊 Update discovery statistics
+            setStatistics(prev => ({
+              ...prev,
+              totalDiscoveries: (prev.totalDiscoveries ?? 0) + 1,
+            }));
+
+            // Toast für Entdeckung
+            setToasts((prevToasts) => [
+              ...prevToasts,
+              {
+                id: toastCounter,
+                type: `🔍 ENTDECKUNG: ${discovery.type}`,
+                location: route.areaName,
+                priority: discovery.priority,
+                incidentId: 0, // Kein Incident-ID da noch Call
+              },
+            ]);
+            setToastCounter((prev) => prev + 1);
+
+            // Sound
+            realisticSoundManager.playQuattroneAlert(0.5);
+            addLog(`🔍 ${vehicle.callsign || `FZ-${vehicle.id}`} entdeckt: ${discovery.type} in ${route.areaName}`, 'new');
+          }
+
+          // Update vehicle mit neuer Position und Ressourcen
+          const fuelConsumed = calculatePatrolFuelConsumption(vehicle, movement.distanceTraveled);
+          const fatigueIncrease = calculatePatrolFatigue(vehicle, deltaTime);
+
+          // Update patrolRoute mit neuem waypoint index
+          const updatedRoute = {
+            ...route,
+            currentWaypointIndex: movement.newWaypointIndex,
+          };
+
+          return {
+            ...vehicle,
+            position: movement.newPosition,
+            patrolRoute: updatedRoute,
+            fuelLevel: Math.max(0, vehicle.fuelLevel - fuelConsumed),
+            crewFatigue: Math.min(100, vehicle.crewFatigue + fatigueIncrease),
+            patrolTotalDistance: vehicle.patrolTotalDistance + movement.distanceTraveled,
+            patrolLastDiscoveryCheck: discovery ? now : vehicle.patrolLastDiscoveryCheck,
+            totalDistanceTraveled: vehicle.totalDistanceTraveled + movement.distanceTraveled,
+          };
+        })
+      );
+    }, 100); // 100ms für flüssige Bewegung
+
+    return () => clearInterval(interval);
+  }, [gameStarted, isPaused, gameSpeed, vehicles, gameTime]);
+
+  // 🚔 AUTO-SCROLL: Scrolle zu ausgewähltem Fahrzeug in der Liste
+  useEffect(() => {
+    if (selectedVehicleId) {
+      const element = document.getElementById(`vehicle-list-item-${selectedVehicleId}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }, [selectedVehicleId]);
 
   // KRITISCHER FIX: RadioMessages Cleanup (verhindert Memory Leak)
   // Behalte nur die letzten 100 Nachrichten ODER Nachrichten der letzten 30 Minuten
@@ -3214,11 +3780,13 @@ function App() {
 
   // Count vehicles by status for filter display
   const vehicleStatusCounts = {
+    S1: vehicles.filter(v => v.status === 'S1').length,
     S2: vehicles.filter(v => v.status === 'S2').length,
     S3: vehicles.filter(v => v.status === 'S3').length,
     S4: vehicles.filter(v => v.status === 'S4').length,
     S5: vehicles.filter(v => v.status === 'S5').length,
     S6: vehicles.filter(v => v.status === 'S6').length,
+    S7: vehicles.filter(v => v.status === 'S7').length,
     S8: vehicles.filter(v => v.status === 'S8').length,
   };
 
@@ -3356,6 +3924,17 @@ function App() {
                       opacity={0.7}
                     />
                   )}
+
+                  {/* 🚔 PATROL ROUTE: Zeige Streifenroute (gestrichelt, auf echten Straßen) */}
+                  {vehicle.isOnPatrol && vehicle.patrolRoute && hoveredVehicleId === vehicle.id && (
+                    <Polyline
+                      positions={vehicle.patrolRoute.fullRoute}
+                      color="#30D158"
+                      weight={3}
+                      opacity={0.6}
+                      dashArray="10, 10"
+                    />
+                  )}
                 </React.Fragment>
               );
             })}
@@ -3467,10 +4046,12 @@ function App() {
                   const statusInfo = getStatusBadge(vehicle.status);
                   const incident = vehicle.assignedIncidentId ? getIncidentById(incidents, vehicle.assignedIncidentId) : undefined;
                   const vehicleConfig = vehicleTypeConfigs[vehicle.vehicleType];
+                  const canStartPatrol = vehicle.status === 'S2' && !vehicle.isOnPatrol && vehicle.fuelLevel > 20;
 
                   return (
                     <div
                       key={vehicle.id}
+                      id={`vehicle-list-item-${vehicle.id}`}
                       className={`vehicle-list-item ${selectedVehicleId === vehicle.id ? 'selected' : ''}`}
                       onClick={() => {
                         setMapCenter(vehicle.position);
@@ -3481,23 +4062,111 @@ function App() {
                       onMouseEnter={() => setHoveredVehicleId(vehicle.id)}
                       onMouseLeave={() => setHoveredVehicleId(null)}
                     >
-                      <div className="vehicle-list-left">
-                        <span className="vehicle-icon">{vehicleConfig.icon}</span>
-                        <span className="vehicle-name">{vehicle.callsign}</span>
-                        <span className="vehicle-status-badge" style={{ background: statusInfo.color }}>
-                          {statusInfo.short}
-                        </span>
+                      <div className="vehicle-list-header">
+                        <div className="vehicle-list-left">
+                          <span className="vehicle-icon">{vehicleConfig.icon}</span>
+                          <span className="vehicle-name">{vehicle.callsign}</span>
+                          <span className="vehicle-status-badge" style={{ background: statusInfo.color }}>
+                            {statusInfo.short}
+                          </span>
+                        </div>
+                        <div className="vehicle-list-right">
+                          {canStartPatrol && (
+                            <button
+                              className="patrol-quick-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPatrolModalVehicleId(vehicle.id);
+                              }}
+                              title="Streifengebiet wählen"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <path d="M8 1v14M2 8h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                                <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+                              </svg>
+                            </button>
+                          )}
+                          {vehicle.isOnPatrol && (
+                            <button
+                              className="patrol-quick-btn active"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStopPatrol(vehicle.id);
+                              }}
+                              title="Streife beenden"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor"/>
+                              </svg>
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="vehicle-list-right">
+
+                      <div className="vehicle-list-status-line">
                         <span className="vehicle-status-text">{statusInfo.text}</span>
                       </div>
+
+                      <div className="vehicle-list-info">
+                        <div className="vehicle-info-item" title={`Tankfüllung: ${Math.round(vehicle.fuelLevel)}%`}>
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                            <rect x="3" y="4" width="8" height="10" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                            <rect x="3" y={14 - (vehicle.fuelLevel / 100 * 10)} width="8" height={vehicle.fuelLevel / 100 * 10} fill={vehicle.fuelLevel > 30 ? '#30D158' : vehicle.fuelLevel > 15 ? '#FFD60A' : '#FF453A'} />
+                            <path d="M11 7h2v4h-2" stroke="currentColor" strokeWidth="1.5"/>
+                          </svg>
+                          <span style={{ color: vehicle.fuelLevel > 30 ? '#30D158' : vehicle.fuelLevel > 15 ? '#FFD60A' : '#FF453A' }}>
+                            {Math.round(vehicle.fuelLevel)}%
+                          </span>
+                        </div>
+
+                        <div className="vehicle-info-item" title={`Crew-Müdigkeit: ${Math.round(vehicle.crewFatigue)}%`}>
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                            <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5"/>
+                            <path d="M5 7h2M9 7h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                            <path d="M5 10.5q1.5-1 3-1t3 1" stroke={vehicle.crewFatigue > 70 ? '#FF453A' : vehicle.crewFatigue > 40 ? '#FFD60A' : '#30D158'} strokeWidth="1.5" strokeLinecap="round"/>
+                          </svg>
+                          <span style={{ color: vehicle.crewFatigue > 70 ? '#FF453A' : vehicle.crewFatigue > 40 ? '#FFD60A' : '#30D158' }}>
+                            {Math.round(vehicle.crewFatigue)}%
+                          </span>
+                        </div>
+
+                        <div className="vehicle-info-item" title={`Wartung: ${vehicle.maintenanceStatus === 'ok' ? 'OK' : vehicle.maintenanceStatus === 'warning' ? 'Wartung bald' : 'Wartung dringend'}`}>
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                            <path d="M8 3v2m0 6v2m5-5h-2m-6 0H3m8.5-3.5l-1.4 1.4m-4.2 4.2l-1.4 1.4m7-1.4l-1.4-1.4m-4.2-4.2L4.5 4.5" stroke={vehicle.maintenanceStatus === 'ok' ? '#30D158' : vehicle.maintenanceStatus === 'warning' ? '#FFD60A' : '#FF453A'} strokeWidth="1.5" strokeLinecap="round"/>
+                            <circle cx="8" cy="8" r="2" fill={vehicle.maintenanceStatus === 'ok' ? '#30D158' : vehicle.maintenanceStatus === 'warning' ? '#FFD60A' : '#FF453A'}/>
+                          </svg>
+                          <span style={{ color: vehicle.maintenanceStatus === 'ok' ? '#30D158' : vehicle.maintenanceStatus === 'warning' ? '#FFD60A' : '#FF453A' }}>
+                            {vehicle.maintenanceStatus === 'ok' ? 'OK' : vehicle.maintenanceStatus === 'warning' ? 'Bald' : 'Dringend'}
+                          </span>
+                        </div>
+
+                        {vehicle.isOnPatrol && vehicle.patrolTotalDistance > 0 && (
+                          <div className="vehicle-info-item" title={`Strecke auf Streife: ${vehicle.patrolTotalDistance.toFixed(1)} km`}>
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                              <path d="M2 8h12M8 2l4 6-4 6-4-6z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                            <span>{vehicle.patrolTotalDistance.toFixed(1)} km</span>
+                          </div>
+                        )}
+                      </div>
+
                       {incident && (
                         <div className="vehicle-list-incident">
                           {incident.type} • {incident.locationName}
                         </div>
                       )}
+                      {vehicle.isOnPatrol && vehicle.patrolRoute && (
+                        <div className="vehicle-list-patrol">
+                          Streife • {vehicle.patrolRoute.areaName}
+                        </div>
+                      )}
                       {vehicle.status === 'S8' && vehicle.canBeRedirected && (
-                        <div className="vehicle-redirect-hint">↻ Kann umgeleitet werden</div>
+                        <div className="vehicle-redirect-hint">
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: '4px' }}>
+                            <path d="M12 4a4 4 0 0 0-8 0v4L2 6m10 6a4 4 0 0 1-8 0V8l2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          Kann umgeleitet werden
+                        </div>
                       )}
                     </div>
                   );
@@ -3517,6 +4186,8 @@ function App() {
                   onAddLog={(message) => addLog(message, 'system')}
                   gameTime={gameTime}
                   onClose={() => setSelectedVehicleId(null)}
+                  onStartPatrol={handleStartPatrol}
+                  onStopPatrol={handleStopPatrol}
                 />
               )}
             </div>
@@ -3941,7 +4612,7 @@ function App() {
 
       <CompactErrorBoundary componentName="Anruf-Modal">
         <CallModal
-          call={selectedCall}
+          call={selectedCall ? calls.find(c => c.id === selectedCall.id) || selectedCall : null}
           isOpen={isCallModalOpen}
           onClose={() => {
             setIsCallModalOpen(false);
@@ -3951,6 +4622,7 @@ function App() {
           onReject={rejectCall}
           availableVehicles={vehicles.filter(v => isVehicleAvailable(v))}
           onAutoAssign={autoAssignVehicles}
+          onDialogResponse={handleDialogResponse}
         />
       </CompactErrorBoundary>
 
@@ -3964,10 +4636,25 @@ function App() {
           }}
           onConfirm={confirmBackup}
           availableVehicles={vehicles.filter(v =>
-            (v.status === 'S2' || (v.status === 'S8' && v.canBeRedirected)) &&
+            isVehicleAvailable(v) &&
             !selectedIncidentForBackup?.assignedVehicleIds.includes(v.id)
           )}
         />
+      </CompactErrorBoundary>
+
+      <CompactErrorBoundary componentName="Streifengebiet-Modal">
+        {patrolModalVehicleId && (
+          <PatrolAreaSelector
+            isOpen={patrolModalVehicleId !== null}
+            onClose={() => setPatrolModalVehicleId(null)}
+            onSelectArea={(areaId) => {
+              handleStartPatrol(patrolModalVehicleId, areaId);
+              setPatrolModalVehicleId(null);
+            }}
+            vehicleCallsign={vehicles.find(v => v.id === patrolModalVehicleId)?.callsign || `FZ-${patrolModalVehicleId}`}
+            currentHour={Math.floor(gameTime / 60)}
+          />
+        )}
       </CompactErrorBoundary>
 
       {isSpeakRequestModalOpen && selectedSpeakRequestVehicle && (
@@ -3983,7 +4670,24 @@ function App() {
             onConfirm={() => {
               if (!selectedSpeakRequestVehicle) return;
 
-              const returnStatus = selectedSpeakRequestVehicle.previousStatus || 'S4';
+              // 🔒 DEADLOCK-FIX: Wenn S5 während S4 kam, automatisch zur Rückfahrt (S8)
+              // Sonst würde Fahrzeug zurück zu S4 gehen und Einsatz nie abschließen
+              let returnStatus = selectedSpeakRequestVehicle.previousStatus || 'S4';
+
+              // Wenn previousStatus = S4 war (am Einsatzort), prüfe ob Einsatz abgearbeitet ist
+              if (returnStatus === 'S4' && selectedSpeakRequestVehicle.processingStartTime) {
+                const processingElapsed = (Date.now() - selectedSpeakRequestVehicle.processingStartTime) / 1000;
+                const processingComplete = processingElapsed >= selectedSpeakRequestVehicle.processingDuration;
+
+                // Wenn Einsatz fertig → direkt zu S8 (Rückfahrt)
+                if (processingComplete) {
+                  returnStatus = 'S8';
+                  // Löse Rückfahrt aus (wird in returnToStation-Funktion gehandhabt)
+                  setTimeout(() => {
+                    returnToStation(selectedSpeakRequestVehicle.id);
+                  }, 100);
+                }
+              }
 
               setVehicles(prev => prev.map(v =>
                 v.id === selectedSpeakRequestVehicle.id

@@ -18,13 +18,30 @@ import {
   MAINTENANCE_RANDOM_BREAKDOWN_CHANCE,
 } from '../constants/gameplayConstants';
 
-// Berechne Treibstoffverbrauch basierend auf gefahrener Strecke
+// Berechne Treibstoffverbrauch basierend auf gefahrener Strecke oder Flugzeit
 export const calculateFuelConsumption = (
   vehicle: Vehicle,
-  distanceKm: number
+  distanceKm: number,
+  durationHours?: number,
+  difficultyMultiplier: number = 1.0 // 🎮 Phase 4: Schwierigkeitsgrad-Multiplikator
 ): number => {
   const config = vehicleTypeConfigs[vehicle.vehicleType];
-  const consumption = config.fuelConsumption * distanceKm;
+
+  let consumption: number;
+
+  // 🚁 BUG FIX: Hubschrauber verbrauchen basierend auf ZEIT, nicht Distanz
+  // Hubschrauber fliegen Luftlinie (kürzere Distanz) aber verbrauchen viel Treibstoff pro Stunde
+  if (vehicle.vehicleType === 'Polizeihubschrauber' && durationHours !== undefined) {
+    // Hubschrauber: ~200 Liter/Stunde (realistische Verbrauchsrate)
+    const HELICOPTER_CONSUMPTION_PER_HOUR = 200; // Liter/Stunde
+    consumption = HELICOPTER_CONSUMPTION_PER_HOUR * durationHours;
+  } else {
+    // Bodenfahrzeuge: Verbrauch basierend auf Distanz
+    consumption = config.fuelConsumption * distanceKm;
+  }
+
+  // 🎮 Phase 4: Schwierigkeitsgrad-Multiplikator anwenden
+  consumption = consumption * difficultyMultiplier;
 
   // Konvertiere Liter zu Prozent
   const percentageConsumed = (consumption / config.tankCapacity) * 100;
@@ -35,7 +52,8 @@ export const calculateFuelConsumption = (
 // Berechne Crew-Fatigue basierend auf Einsatzzeit
 export const calculateCrewFatigue = (
   vehicle: Vehicle,
-  hoursWorked: number
+  hoursWorked: number,
+  difficultyMultiplier: number = 1.0 // 🎮 Phase 4: Schwierigkeitsgrad-Multiplikator
 ): number => {
   const config = vehicleTypeConfigs[vehicle.vehicleType];
 
@@ -45,6 +63,9 @@ export const calculateCrewFatigue = (
   // Größere Crews ermüden langsamer (mehr Leute zum Wechseln)
   const crewFactor = config.crewSize / 2; // 2 = Basis
   fatigue = fatigue / crewFactor;
+
+  // 🎮 Phase 4: Schwierigkeitsgrad-Multiplikator anwenden
+  fatigue = fatigue * difficultyMultiplier;
 
   return Math.min(100, fatigue);
 };

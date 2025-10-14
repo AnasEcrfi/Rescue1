@@ -59,7 +59,7 @@ export interface Vehicle {
   vehicleType: VehicleType;
   speakRequest: string | null; // S5: Was möchte das Fahrzeug mitteilen?
   speakRequestType?: 'situation_report' | 'escalation' | 'backup_needed' | 'suspect_arrested' | 'additional_info' | 'unclear_situation'; // S5: Typ des Sprechwunsches
-  outOfServiceReason: string | null; // S6: Warum außer Dienst?
+  outOfServiceReason: ServiceReason | null; // S6: Warum außer Dienst?
   outOfServiceUntil: number | null; // S6: Wann wieder verfügbar?
   canBeRedirected: boolean; // Kann während S8 umgeleitet werden?
   situationReportSent: boolean; // Lagemeldung bei S4 gesendet?
@@ -76,6 +76,13 @@ export interface Vehicle {
   accumulatedTime: number; // Akkumulierte Zeit für Routenberechnung
   activeDispatchTimeout?: ReturnType<typeof setTimeout>; // 🔒 BUG FIX #3: Timeout-ID für Cleanup
   callsign?: string; // Funkrufname (z.B. "Frank 1/47-01")
+  // 🚔 PATROL SYSTEM (Streifenfahrt)
+  isOnPatrol: boolean; // Aktuell auf Streife
+  patrolRoute: import('./patrol').PatrolRoute | null; // Aktuelle Streifenroute
+  patrolAreaId: string | null; // 🎯 Zugewiesenes Patrol-Gebiet (bleibt konstant während Streife)
+  patrolStartTime: number | null; // Start der Streife (gameTime)
+  patrolTotalDistance: number; // Bisherige Distanz dieser Streife (km)
+  patrolLastDiscoveryCheck: number; // Letzte Discovery-Prüfung (gameTime)
 }
 
 // Call (Notruf) - kommt rein bevor ein Einsatz erstellt wird
@@ -98,6 +105,35 @@ export interface Call {
   // MANV-Informationen
   isMANV?: boolean;
   involvedCount?: number;
+
+  // 🆕 Interactive Dialog System (911/112 Operator Style)
+  dialogState?: {
+    isActive: boolean; // Dialog-Modus aktiv
+    messagesHistory: Array<{
+      id: string;
+      sender: 'caller' | 'dispatcher' | 'system';
+      text: string;
+      timestamp: number;
+      emotion?: 'panic' | 'calm' | 'angry' | 'scared' | 'shocked';
+    }>;
+    currentOptions: string[]; // Verfügbare Frage-IDs
+    revealedInfo: {
+      hasLocation: boolean;
+      hasIncidentType: boolean;
+      hasPriority: boolean;
+      hasDescription: boolean;
+    };
+    isComplete: boolean; // Alle Infos gesammelt
+  };
+  // Versteckte Informationen (werden durch Dialog enthüllt)
+  hiddenData?: {
+    actualPosition?: [number, number];
+    actualLocation?: string;
+    actualAddress?: string;
+    actualType?: string;
+    actualPriority?: 'low' | 'medium' | 'high';
+    actualDescription?: string;
+  };
 }
 
 export interface Incident {
@@ -161,3 +197,6 @@ export interface IncidentType {
 export type TimeOfDay = 'night' | 'dusk' | 'day' | 'rushHour';
 
 export type WeatherType = 'sunny' | 'rainy' | 'stormy' | 'foggy' | 'snowy';
+
+// Service Reason Types (S6 - Out of Service)
+export type ServiceReason = 'Tanken' | 'Reparatur' | 'Crew-Pause' | 'Schichtende' | 'unknown';

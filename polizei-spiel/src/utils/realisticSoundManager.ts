@@ -226,6 +226,18 @@ class RealisticSoundManager {
       }
     });
 
+    // 🔄 BEI JEDEM LOOP-NEUSTART: Springe zu neuer zufälliger Position
+    this.backgroundRadio.addEventListener('ended', () => {
+      if (this.backgroundRadio && this.backgroundRadio.loop) {
+        const duration = this.backgroundRadio.duration;
+        // Neue zufällige Position für Abwechslung
+        const randomPosition = Math.random() * (duration * 0.9);
+        this.backgroundRadio.currentTime = randomPosition;
+        console.log(`[REALISTIC AUDIO] 🔄 Funkverkehr Loop: Springe zu ${Math.floor(randomPosition)}s`);
+        this.backgroundRadio.play().catch(err => console.error('[REALISTIC AUDIO] Fehler beim Loop:', err));
+      }
+    });
+
     this.backgroundRadio.play()
       .then(() => console.log('[REALISTIC AUDIO] ✓ Hintergrund-Funkverkehr läuft (sehr subtil, muffled, zufällige Position)'))
       .catch(err => console.error('[REALISTIC AUDIO] Fehler beim Starten des Funkverkehrs:', err));
@@ -318,7 +330,7 @@ class RealisticSoundManager {
    */
   public playNewIncidentAlert(): void {
     console.log('[REALISTIC AUDIO] 🚨 NEUE EINSATZMELDUNG!');
-    this.playQuattroneAlert(0.40); // Deutlich leiser: 0.40 (vorher 0.55)
+    this.playQuattroneAlert(0.12); // Sehr leise: 0.12 (vorher 0.25)
   }
 
   /**

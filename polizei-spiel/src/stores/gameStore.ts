@@ -226,6 +226,11 @@ const initialStatistics: Statistics = {
   currentStreak: 0,
   bestStreak: 0,
   totalDistance: 0,
+  // 🚔 PATROL STATISTICS
+  totalPatrols: 0,
+  totalPatrolTime: 0,
+  totalDiscoveries: 0,
+  totalPatrolDistance: 0,
 };
 
 const initialState = {

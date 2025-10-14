@@ -57,7 +57,7 @@ const BackupModal: React.FC<BackupModalProps> = ({
 
         <div className="backup-modal-body">
           {/* Sonderrechte-Option wie im CallModal */}
-          <div className="special-rights-toggle">
+          <div className={`special-rights-toggle ${withSpecialRights ? 'with-special-rights' : ''}`}>
             <label className="toggle-label">
               <input
                 type="checkbox"
@@ -65,7 +65,6 @@ const BackupModal: React.FC<BackupModalProps> = ({
                 onChange={(e) => {
                   const newValue = e.target.checked;
                   setWithSpecialRights(newValue);
-                  // 🚨 PIEP-Sound wenn Sonderrechte aktiviert werden
                   if (newValue) {
                     realisticSoundManager.playBlaulichtActivate(0.4);
                   }
@@ -79,22 +78,38 @@ const BackupModal: React.FC<BackupModalProps> = ({
             </label>
           </div>
 
-          <div className="backup-selection-header">
+          <div className="vehicle-selection-header">
             <h4>Verfügbare Fahrzeuge</h4>
-            <span className="backup-selected-count">
-              {selectedVehicles.length}
-            </span>
+            <div className="vehicle-selection-actions">
+              <span className="vehicle-count-badge">
+                {selectedVehicles.length} ausgewählt
+              </span>
+            </div>
           </div>
 
-          <div className="backup-vehicle-list">
+          <div className="vehicle-selection-grid">
             {availableVehicles.length === 0 ? (
               <div className="no-backup-available">
                 ⚠️ Keine Fahrzeuge verfügbar für Verstärkung
               </div>
             ) : (
-              availableVehicles.map((vehicle) => {
+              availableVehicles.slice(0, 12).map((vehicle) => {
                 const config = vehicleTypeConfigs[vehicle.vehicleType];
                 const isSelected = selectedVehicles.includes(vehicle.id);
+
+                // Status-Badge wie im CallModal (App.tsx getStatusBadge)
+                const statusBadges: Record<string, { color: string; text: string; short: string }> = {
+                  'S1': { color: '#30D158', text: 'Frei auf Funk', short: 'S1' },
+                  'S2': { color: '#30D158', text: 'Frei auf Wache', short: 'S2' },
+                  'S3': { color: '#FF9F0A', text: 'Anfahrt', short: 'S3' },
+                  'S4': { color: '#FF453A', text: 'Einsatzort', short: 'S4' },
+                  'S5': { color: '#0A84FF', text: 'Sprechwunsch', short: 'S5' },
+                  'S6': { color: '#8E8E93', text: 'Nicht einsatzbereit', short: 'S6' },
+                  'S7': { color: '#FFC107', text: 'Tanken', short: 'S7' },
+                  'S8': { color: '#FFD60A', text: 'Rückfahrt', short: 'S8' },
+                };
+
+                const statusInfo = statusBadges[vehicle.status] || { color: '#8E8E93', text: 'Unbekannt', short: '??' };
 
                 // Berechne Entfernung zum Einsatzort
                 const distance = calculateDistance(
@@ -107,7 +122,7 @@ const BackupModal: React.FC<BackupModalProps> = ({
                 return (
                   <button
                     key={vehicle.id}
-                    className={`backup-vehicle-card ${isSelected ? 'selected' : ''}`}
+                    className={`vehicle-selection-card ${isSelected ? 'selected' : ''}`}
                     onClick={() => {
                       if (isSelected) {
                         setSelectedVehicles(selectedVehicles.filter(id => id !== vehicle.id));
@@ -116,19 +131,22 @@ const BackupModal: React.FC<BackupModalProps> = ({
                       }
                     }}
                   >
-                    <div className="backup-vehicle-icon">{config.icon}</div>
-                    <div className="backup-vehicle-info">
-                      <div className="backup-vehicle-name">
-                        {vehicle.callsign}
+                    <div className="vehicle-selection-info">
+                      <div className="vehicle-selection-name">{vehicle.callsign}</div>
+                      <div className="vehicle-selection-meta">
+                        <span
+                          className="vehicle-status-badge"
+                          style={{ background: statusInfo.color }}
+                        >
+                          {statusInfo.short}
+                        </span>
+                        <span className="vehicle-status-text">{statusInfo.text}</span>
                       </div>
-                      <div className="backup-vehicle-status">
-                        {vehicle.status === 'S2' ? '● Bereit auf Wache' : vehicle.status === 'S8' ? '↻ Rückfahrt' : '● Verfügbar'}
-                      </div>
-                      <div className="backup-vehicle-distance">
+                      <div className="vehicle-distance-badge">
                         {distanceKm} km · {estimatedTime} min
                       </div>
                     </div>
-                    {isSelected && <div className="backup-selected-check">✓</div>}
+                    {isSelected && <div className="vehicle-selected-check">✓</div>}
                   </button>
                 );
               })

@@ -8,6 +8,11 @@ export interface Statistics {
   currentStreak: number;
   bestStreak: number;
   totalDistance: number;
+  // 🚔 PATROL STATISTICS
+  totalPatrols?: number; // Abgeschlossene Streifen
+  totalPatrolTime?: number; // Gesamt-Zeit auf Streife (Minuten)
+  totalDiscoveries?: number; // Entdeckungen während Streifen
+  totalPatrolDistance?: number; // Distanz auf Streife (km)
 }
 
 interface StatisticsModalProps {
@@ -88,6 +93,26 @@ const StatisticsModal: React.FC<StatisticsModalProps> = ({ isOpen, onClose, stat
               <div className="stat-label-clean">Strecke</div>
               <div className="stat-value-clean">{distanceKm} km</div>
             </div>
+
+            {/* 🚔 PATROL STATISTICS */}
+            {(stats.totalPatrols ?? 0) > 0 && (
+              <>
+                <div className="stat-card-clean">
+                  <div className="stat-label-clean">🚔 Streifen</div>
+                  <div className="stat-value-clean">{stats.totalPatrols}</div>
+                </div>
+
+                <div className="stat-card-clean">
+                  <div className="stat-label-clean">🔍 Entdeckungen</div>
+                  <div className="stat-value-clean">{stats.totalDiscoveries ?? 0}</div>
+                </div>
+
+                <div className="stat-card-clean">
+                  <div className="stat-label-clean">Streife km</div>
+                  <div className="stat-value-clean">{((stats.totalPatrolDistance ?? 0)).toFixed(1)} km</div>
+                </div>
+              </>
+            )}
           </div>
 
           {Object.keys(stats.incidentsByType).length > 0 && (

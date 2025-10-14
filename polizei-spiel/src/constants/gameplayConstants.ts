@@ -463,6 +463,40 @@ export const MODAL_FADE_DURATION = 300; // 0.3 Sekunden
 export const MAP_ZOOM_DURATION = 0.5; // 0.5 Sekunden
 
 // ============================================================================
+// KOSTEN (Costs) - 🎮 Phase 5: Realismus
+// ============================================================================
+
+/**
+ * Kosten für Tanken
+ * Durchschnittlich 50-70 Liter × 1.80 EUR = ~100 EUR
+ */
+export const REFUEL_COST = 10; // Punkte (Score-Abzug)
+
+/**
+ * Minimale Reparatur-Kosten
+ * Kleine Reparaturen, Inspektion
+ */
+export const REPAIR_COST_MIN = 20; // Punkte
+
+/**
+ * Maximale Reparatur-Kosten
+ * Große Reparaturen, Unfallschaden
+ */
+export const REPAIR_COST_MAX = 50; // Punkte
+
+/**
+ * Kosten für Crew-Pause
+ * Überstunden-Zuschlag für Bereitschaftsbesatzung
+ */
+export const CREW_BREAK_COST = 5; // Punkte
+
+/**
+ * Kosten für Schichtwechsel
+ * Administrative Kosten, Übergabe
+ */
+export const SHIFT_CHANGE_COST = 5; // Punkte
+
+// ============================================================================
 // SCHWIERIGKEITSGRAD-MULTIPLIKATOREN
 // ============================================================================
 
@@ -611,4 +645,11 @@ export const GAMEPLAY_CONSTANTS = {
   DIFFICULTY_EASY,
   DIFFICULTY_MEDIUM,
   DIFFICULTY_HARD,
+
+  // 🎮 Phase 5: Realismus - Kosten
+  REFUEL_COST,
+  REPAIR_COST_MIN,
+  REPAIR_COST_MAX,
+  CREW_BREAK_COST,
+  SHIFT_CHANGE_COST,
 } as const;

@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import type { Call, Vehicle } from '../types';
+import type { DialogOption } from '../types/dialogSystem';
 import { vehicleTypeConfigs } from '../constants/vehicleTypes';
 import { calculateDistance } from '../services/routingService';
 import { realisticSoundManager } from '../utils/realisticSoundManager';
+import { dialogTemplates } from '../constants/dialogTemplates';
 
 interface CallModalProps {
   call: Call | null;
@@ -15,6 +17,7 @@ interface CallModalProps {
   availableVehicles: Vehicle[];
   onAssignVehicle?: (vehicleId: number, callId: number) => void;
   onAutoAssign?: (callId: number) => number[]; // Automatische Fahrzeugempfehlung
+  onDialogResponse?: (callId: number, optionId: string) => void; // Dialog-Interaktion
 }
 
 const CallModal: React.FC<CallModalProps> = ({
@@ -25,6 +28,7 @@ const CallModal: React.FC<CallModalProps> = ({
   onReject,
   availableVehicles,
   onAutoAssign,
+  onDialogResponse,
 }) => {
   const [typedText, setTypedText] = useState('');
   const [isTypingComplete, setIsTypingComplete] = useState(false);
@@ -41,7 +45,7 @@ const CallModal: React.FC<CallModalProps> = ({
     return () => clearInterval(interval);
   }, [isOpen]);
 
-  // Typing effect for caller text
+  // Typing effect for caller text (handles both regular and dialog modes)
   useEffect(() => {
     if (!isOpen || !call) {
       setTypedText('');
@@ -51,7 +55,20 @@ const CallModal: React.FC<CallModalProps> = ({
       return;
     }
 
-    const fullText = call.callerText;
+    // Dialog-Modus: Type the LAST caller message
+    let fullText: string;
+    let messageId: string | undefined;
+    if (call.dialogState?.isActive) {
+      // Finde die letzte Caller-Nachricht
+      const messages = call.dialogState.messagesHistory;
+      const lastCallerMessage = [...messages].reverse().find(m => m.sender === 'caller');
+      fullText = lastCallerMessage?.text || call.callerText;
+      messageId = lastCallerMessage?.id;
+    } else {
+      fullText = call.callerText;
+      messageId = undefined;
+    }
+
     let currentIndex = 0;
     setTypedText('');
     setIsTypingComplete(false);
@@ -77,7 +94,21 @@ const CallModal: React.FC<CallModalProps> = ({
     // Start typing after small delay
     const startDelay = setTimeout(typeNextChar, 300);
     return () => clearTimeout(startDelay);
-  }, [call, isOpen]);
+  }, [call, isOpen, call?.dialogState?.messagesHistory?.filter(m => m.sender === 'caller').length]);
+
+  // Dialog-Handler: Frage stellen
+  const handleDialogQuestion = (optionId: string) => {
+    if (!call || !onDialogResponse) return;
+    onDialogResponse(call.id, optionId);
+  };
+
+  // Hilfsfunktion: Hole DialogOption aus Template
+  const getDialogOption = (optionId: string): DialogOption | null => {
+    if (!call?.dialogState?.isActive || !call.type) return null;
+    const template = dialogTemplates[call.type];
+    if (!template) return null;
+    return template.dialogTree[optionId] || null;
+  };
 
   // Reset selected vehicles when modal closes
   useEffect(() => {
@@ -151,72 +182,86 @@ const CallModal: React.FC<CallModalProps> = ({
         </div>
 
         <div className="call-modal-body">
-          <div className="call-text-container">
-            <div className="call-text-label">
-              <span className="status-dot">{isTypingComplete ? '○' : '●'}</span>
-              {isTypingComplete ? 'Protokoll' : 'Live'}
-            </div>
-            <div className="call-text-content">
-              {typedText}
-              {!isTypingComplete && <span className="typing-cursor">|</span>}
-            </div>
-          </div>
-
-          {/* Mini-Map mit Einsatzort */}
-          <div className="call-mini-map-container">
-            <MapContainer
-              center={call.position}
-              zoom={15}
-              style={{ height: '100%', width: '100%', borderRadius: '8px' }}
-              zoomControl={false}
-              dragging={false}
-              scrollWheelZoom={false}
-              doubleClickZoom={false}
-              touchZoom={false}
-            >
-              <TileLayer
-                attribution='&copy; OpenStreetMap'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              <Marker
-                position={call.position}
-                icon={L.divIcon({
-                  className: 'incident-marker-mini',
-                  html: `<div class="incident-dot-mini"></div>`,
-                  iconSize: [20, 20],
-                  iconAnchor: [10, 10],
-                })}
-              />
-              <Circle
+          {/* Mini-Map mit Einsatzort - nur wenn Standort bekannt ist */}
+          {(!call.dialogState?.isActive || call.dialogState?.revealedInfo.hasLocation) && (
+            <div className="call-mini-map-container">
+              <MapContainer
                 center={call.position}
-                radius={200}
-                pathOptions={{
-                  color: 'var(--color-danger)',
-                  fillColor: 'var(--color-danger)',
-                  fillOpacity: 0.1,
-                  weight: 2,
-                }}
-              />
-            </MapContainer>
-          </div>
+                zoom={15}
+                style={{ height: '100%', width: '100%', borderRadius: '8px' }}
+                zoomControl={false}
+                dragging={false}
+                scrollWheelZoom={false}
+                doubleClickZoom={false}
+                touchZoom={false}
+              >
+                <TileLayer
+                  attribution='&copy; OpenStreetMap'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <Marker
+                  position={call.position}
+                  icon={L.divIcon({
+                    className: 'incident-marker-mini',
+                    html: `<div class="incident-dot-mini"></div>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10],
+                  })}
+                />
+                <Circle
+                  center={call.position}
+                  radius={200}
+                  pathOptions={{
+                    color: 'var(--color-danger)',
+                    fillColor: 'var(--color-danger)',
+                    fillOpacity: 0.1,
+                    weight: 2,
+                  }}
+                />
+              </MapContainer>
+            </div>
+          )}
+
+          {/* Dialog-Modus: Standort unbekannt */}
+          {call.dialogState?.isActive && !call.dialogState?.revealedInfo.hasLocation && (
+            <div className="call-mini-map-container call-location-unknown">
+              <div className="location-unknown-overlay">
+                <div className="location-unknown-icon">📍</div>
+                <div className="location-unknown-text">Standort noch nicht bekannt</div>
+                <div className="location-unknown-hint">Fragen Sie nach der Adresse</div>
+              </div>
+            </div>
+          )}
 
           <div className="call-details">
             <div className="call-detail-item">
               <span className="call-detail-label">Einsatztyp:</span>
-              <span className="call-detail-value">{call.type}</span>
+              <span className="call-detail-value">
+                {call.dialogState?.isActive && !call.dialogState?.revealedInfo.hasIncidentType
+                  ? '???'
+                  : call.type}
+              </span>
             </div>
             <div className="call-detail-item">
               <span className="call-detail-label">Ort:</span>
-              <span className="call-detail-value">{call.locationName}</span>
+              <span className="call-detail-value">
+                {call.dialogState?.isActive && !call.dialogState?.revealedInfo.hasLocation
+                  ? '???'
+                  : call.locationName}
+              </span>
             </div>
             <div className="call-detail-item">
               <span className="call-detail-label">Adresse:</span>
-              <span className="call-detail-value call-address">{call.address}</span>
+              <span className="call-detail-value call-address">
+                {call.dialogState?.isActive && !call.dialogState?.revealedInfo.hasLocation
+                  ? '???'
+                  : call.address}
+              </span>
             </div>
           </div>
 
           {/* Fahrzeugauswahl - wie bei LST SIM */}
-          {isTypingComplete && (
+          {isTypingComplete && (!call.dialogState?.isActive || call.dialogState.isComplete) && (
             <div className="vehicle-selection-section">
               {/* Sonderrechte-Option */}
               <div className={`special-rights-toggle ${withSpecialRights ? 'with-special-rights' : ''}`}>
@@ -270,10 +315,20 @@ const CallModal: React.FC<CallModalProps> = ({
                   availableVehicles.slice(0, 12).map((vehicle) => {
                     const config = vehicleTypeConfigs[vehicle.vehicleType];
                     const isSelected = selectedVehicles.includes(vehicle.id);
-                    const statusColors: { [key: string]: string } = {
-                      S1: '#30D158',
-                      S8: '#0A84FF',
+
+                    // Status-Badge wie im Rest des Spiels (App.tsx getStatusBadge)
+                    const statusBadges: Record<string, { color: string; text: string; short: string }> = {
+                      'S1': { color: '#30D158', text: 'Frei auf Funk', short: 'S1' },
+                      'S2': { color: '#30D158', text: 'Frei auf Wache', short: 'S2' },
+                      'S3': { color: '#FF9F0A', text: 'Anfahrt', short: 'S3' },
+                      'S4': { color: '#FF453A', text: 'Einsatzort', short: 'S4' },
+                      'S5': { color: '#0A84FF', text: 'Sprechwunsch', short: 'S5' },
+                      'S6': { color: '#8E8E93', text: 'Nicht einsatzbereit', short: 'S6' },
+                      'S7': { color: '#FFC107', text: 'Tanken', short: 'S7' },
+                      'S8': { color: '#FFD60A', text: 'Rückfahrt', short: 'S8' },
                     };
+
+                    const statusInfo = statusBadges[vehicle.status] || { color: '#8E8E93', text: 'Unbekannt', short: '??' };
 
                     // Berechne Entfernung zum Einsatzort
                     const distance = calculateDistance(
@@ -295,16 +350,16 @@ const CallModal: React.FC<CallModalProps> = ({
                           }
                         }}
                       >
-                        <div className="vehicle-selection-icon">{config.icon}</div>
                         <div className="vehicle-selection-info">
-                          <div className="vehicle-selection-name">
-                            {vehicle.callsign}
-                          </div>
-                          <div
-                            className="vehicle-selection-status"
-                            style={{ color: statusColors[vehicle.status] }}
-                          >
-                            {vehicle.status === 'S1' ? '● Bereit' : '↻ Rückfahrt'}
+                          <div className="vehicle-selection-name">{vehicle.callsign}</div>
+                          <div className="vehicle-selection-meta">
+                            <span
+                              className="vehicle-status-badge"
+                              style={{ background: statusInfo.color }}
+                            >
+                              {statusInfo.short}
+                            </span>
+                            <span className="vehicle-status-text">{statusInfo.text}</span>
                           </div>
                           <div className="vehicle-distance-badge">
                             {distanceKm} km · {estimatedTime} min
@@ -336,10 +391,22 @@ const CallModal: React.FC<CallModalProps> = ({
               onAccept(call.id, selectedVehicles.length > 0 ? selectedVehicles : undefined, withSpecialRights);
               onClose();
             }}
-            disabled={!isTypingComplete || selectedVehicles.length === 0}
-            title={selectedVehicles.length === 0 ? 'Bitte mindestens ein Fahrzeug auswählen' : 'Einsatz erstellen'}
+            disabled={
+              !isTypingComplete ||
+              (call.dialogState?.isActive && !call.dialogState.isComplete) ||
+              (!call.dialogState?.isActive && selectedVehicles.length === 0)
+            }
+            title={
+              call.dialogState?.isActive && !call.dialogState.isComplete
+                ? 'Bitte weitere Informationen erfragen'
+                : selectedVehicles.length === 0
+                ? 'Bitte mindestens ein Fahrzeug auswählen'
+                : 'Einsatz erstellen'
+            }
           >
-            Einsatz erstellen {selectedVehicles.length > 0 && `(${selectedVehicles.length})`}
+            {call.dialogState?.isActive && !call.dialogState.isComplete
+              ? 'Weitere Informationen erforderlich'
+              : `Einsatz erstellen ${selectedVehicles.length > 0 ? `(${selectedVehicles.length})` : ''}`}
           </button>
         </div>
       </div>
@@ -352,42 +419,126 @@ const CallModal: React.FC<CallModalProps> = ({
         </div>
 
         <div className="call-protocol-content">
-          {/* Anrufer-Nachricht */}
-          <div className="protocol-message protocol-message-caller">
-            <div className="protocol-message-header">
-              <span className="protocol-sender">
-                {call.callerName || getCallerTypeLabel(call.callerType)}
-              </span>
-              <span className="protocol-time">
-                vor {timeAgo}s
-              </span>
-            </div>
-            <div className="protocol-message-text">
-              {typedText}
-              {!isTypingComplete && <span className="typing-cursor">|</span>}
-            </div>
-          </div>
+          {/* Dialog-Modus: Vollständiger Gesprächsverlauf */}
+          {call.dialogState?.isActive ? (
+            <>
+              {call.dialogState.messagesHistory.map((message, index) => {
+                const isLastMessage = index === call.dialogState!.messagesHistory.length - 1;
+                const messageTimeAgo = Math.floor((currentTime - message.timestamp) / 1000);
 
-          {/* Platzhalter für zukünftige Kommunikation */}
-          {isTypingComplete && (
-            <div className="protocol-message protocol-message-system">
-              <div className="protocol-message-text">
-                Warten auf Einsatzannahme...
+                return (
+                  <div
+                    key={message.id}
+                    className={`protocol-message protocol-message-${message.sender}`}
+                  >
+                    <div className="protocol-message-header">
+                      <span className="protocol-sender">
+                        {message.sender === 'caller'
+                          ? call.callerName || getCallerTypeLabel(call.callerType)
+                          : message.sender === 'dispatcher'
+                          ? 'Leitstelle'
+                          : 'System'}
+                      </span>
+                      <span className="protocol-time">vor {messageTimeAgo}s</span>
+                    </div>
+                    <div className="protocol-message-text">
+                      {isLastMessage && message.sender === 'caller'
+                        ? typedText
+                        : message.text}
+                      {isLastMessage && message.sender === 'caller' && !isTypingComplete && (
+                        <span className="typing-cursor">|</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Status-Hinweis */}
+              {isTypingComplete && (
+                <div className="protocol-message protocol-message-system">
+                  <div className="protocol-message-text">
+                    {call.dialogState.isComplete
+                      ? '✓ Alle Informationen gesammelt. Einsatz kann erstellt werden.'
+                      : '⏳ Weitere Rückfragen möglich...'}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Normaler Modus: Einzelne Anrufer-Nachricht */}
+              <div className="protocol-message protocol-message-caller">
+                <div className="protocol-message-header">
+                  <span className="protocol-sender">
+                    {call.callerName || getCallerTypeLabel(call.callerType)}
+                  </span>
+                  <span className="protocol-time">vor {timeAgo}s</span>
+                </div>
+                <div className="protocol-message-text">
+                  {typedText}
+                  {!isTypingComplete && <span className="typing-cursor">|</span>}
+                </div>
               </div>
-            </div>
+
+              {/* Platzhalter für zukünftige Kommunikation */}
+              {isTypingComplete && (
+                <div className="protocol-message protocol-message-system">
+                  <div className="protocol-message-text">
+                    Warten auf Einsatzannahme...
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         <div className="call-protocol-footer">
-          <input
-            type="text"
-            className="protocol-input"
-            placeholder="Nachricht eingeben (coming soon)..."
-            disabled
-          />
-          <button className="protocol-send-btn" disabled>
-            Senden
-          </button>
+          {/* Dialog-Modus: Rückfrage-Buttons */}
+          {call.dialogState?.isActive && isTypingComplete && !call.dialogState.isComplete ? (
+            <div className="dialog-questions-footer">
+              {call.dialogState.currentOptions.map((optionId) => {
+                const option = getDialogOption(optionId);
+                if (!option) return null;
+
+                // Icon basierend auf Kategorie
+                const categoryIcons: { [key: string]: string } = {
+                  location: '📍',
+                  incident_type: '🚨',
+                  persons: '👥',
+                  danger: '⚠️',
+                  description: '📝',
+                  general: '💬',
+                };
+
+                return (
+                  <button
+                    key={optionId}
+                    className={`dialog-question-btn-footer dialog-category-${option.category}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleDialogQuestion(optionId);
+                    }}
+                  >
+                    <span className="dialog-question-icon">{categoryIcons[option.category]}</span>
+                    <span className="dialog-question-text">{option.text}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <>
+              <input
+                type="text"
+                className="protocol-input"
+                placeholder="Nachricht eingeben (coming soon)..."
+                disabled
+              />
+              <button className="protocol-send-btn" disabled>
+                Senden
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

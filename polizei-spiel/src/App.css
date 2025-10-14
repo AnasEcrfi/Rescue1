@@ -2408,35 +2408,124 @@ p {
 .vehicle-list-item {
   display: flex;
   flex-direction: column;
-  padding: 6px 8px;
-  margin-bottom: 2px;
+  padding: 10px;
+  margin-bottom: 6px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .vehicle-list-item:hover {
   background: var(--color-surface-secondary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
 }
 
 .vehicle-list-item.selected {
-  background: rgba(10, 132, 255, 0.1);
+  background: rgba(10, 132, 255, 0.08);
   border-color: var(--color-primary);
+  box-shadow: 0 2px 8px rgba(10, 132, 255, 0.15);
+}
+
+.vehicle-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 12px;
 }
 
 .vehicle-list-left {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
+  flex: 1;
+  min-width: 0;
 }
 
 .vehicle-list-right {
   display: flex;
   align-items: center;
-  padding-left: 20px;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Minimalistischer Streife-Button */
+.patrol-quick-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  color: var(--color-text-tertiary);
+  padding: 0;
+}
+
+.patrol-quick-btn:hover {
+  background: var(--color-surface-secondary);
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-secondary);
+}
+
+.patrol-quick-btn:active {
+  transform: scale(0.95);
+}
+
+.patrol-quick-btn.active {
+  background: rgba(48, 209, 88, 0.1);
+  border-color: #30D158;
+  color: #30D158;
+}
+
+.patrol-quick-btn.active:hover {
+  background: rgba(48, 209, 88, 0.15);
+  border-color: #28a745;
+  color: #28a745;
+}
+
+/* Fahrzeugstatus-Zeile */
+.vehicle-list-status-line {
+  margin-bottom: 6px;
+}
+
+.vehicle-list-status-line .vehicle-status-text {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+/* Fahrzeuginformationen - Kompakte Grid-Anordnung */
+.vehicle-list-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 6px;
+}
+
+.vehicle-info-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.vehicle-info-item svg {
+  flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .vehicle-name {
@@ -2471,8 +2560,23 @@ p {
 .vehicle-list-incident {
   font-size: 10px;
   color: var(--color-text-secondary);
-  margin-top: 2px;
-  padding-left: 20px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 69, 58, 0.08);
+  border-left: 2px solid #FF453A;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.vehicle-list-patrol {
+  font-size: 10px;
+  color: #30D158;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(48, 209, 88, 0.08);
+  border-left: 2px solid #30D158;
+  border-radius: 4px;
+  font-weight: 500;
 }
 
 /* NEU: Fahrzeug-Icon und Umleitungshinweis */
@@ -2488,10 +2592,15 @@ p {
 }
 
 .vehicle-redirect-hint {
+  display: flex;
+  align-items: center;
   font-size: 10px;
   color: var(--color-primary);
-  margin-top: 4px;
-  padding-left: 26px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(10, 132, 255, 0.08);
+  border-left: 2px solid var(--color-primary);
+  border-radius: 4px;
   font-weight: 500;
 }
 
@@ -3558,6 +3667,7 @@ p {
 .vehicle-marker {
   background: transparent !important;
   border: none !important;
+  cursor: pointer !important; /* ✅ Mache Marker klickbar */
 }
 
 .vehicle-marker-container {
@@ -3567,6 +3677,7 @@ p {
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer; /* ✅ Mache Container klickbar */
 }
 
 .vehicle-marker-container svg {
@@ -3582,6 +3693,7 @@ p {
   background-repeat: no-repeat;
   background-position: center;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  cursor: pointer; /* ✅ Mache Vehicle-Icons klickbar */
 }
 
 .vehicle-icon-blaulicht-off {
@@ -4545,7 +4657,7 @@ p {
   animation: fadeIn 0.2s ease-out;
 }
 
-/* Container für zweispaltiges Layout */
+/* Container für zweispaltiges Layout - Minimalistisch & Modern */
 .call-modal-container {
   position: fixed;
   top: 50%;
@@ -4553,14 +4665,14 @@ p {
   transform: translate(-50%, -50%);
   z-index: 10000;
   display: flex;
-  gap: 0;
+  gap: 1px;
   max-width: 95vw;
   max-height: 90vh;
   animation: slideInModal 0.2s ease-out;
-  background: var(--color-surface);
-  border-radius: 12px;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--color-divider);
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12),
+              0 0 0 0.5px rgba(0, 0, 0, 0.04);
   overflow: hidden;
 }
 
@@ -4570,7 +4682,6 @@ p {
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--color-divider);
 }
 
 @keyframes slideInModal {
@@ -4597,9 +4708,9 @@ p {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--color-divider);
-  background: var(--color-surface-secondary);
+  padding: 20px 24px;
+  border-bottom: none;
+  background: transparent;
 }
 
 .call-modal-title {
@@ -4679,18 +4790,18 @@ p {
 }
 
 .call-modal-info {
-  padding: 10px 16px;
-  background: var(--color-surface-secondary);
-  border-bottom: 1px solid var(--color-divider);
+  padding: 16px 24px;
+  background: transparent;
+  border-bottom: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .call-info-row {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .call-info-label {
@@ -4701,17 +4812,17 @@ p {
 .call-info-value {
   color: var(--color-text-primary);
   font-weight: 600;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .call-modal-body {
-  padding: 14px 16px;
+  padding: 24px;
   overflow-y: auto;
   flex: 1;
 }
 
 .call-text-container {
-  margin-bottom: 14px;
+  margin-bottom: 20px;
 }
 
 .call-text-label {
@@ -4719,17 +4830,20 @@ p {
   font-weight: 600;
   color: var(--color-text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
-  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .call-text-content {
-  background: var(--color-surface-secondary);
-  border-left: 3px solid var(--color-primary);
-  padding: 10px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.5;
+  background: rgba(10, 132, 255, 0.05);
+  border: 1px solid rgba(10, 132, 255, 0.1);
+  padding: 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--color-text-primary);
   font-style: italic;
 }
@@ -4737,7 +4851,7 @@ p {
 .call-details {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .call-detail-item {
@@ -4762,9 +4876,9 @@ p {
 .call-modal-footer {
   display: flex;
   gap: 10px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--color-divider);
-  background: var(--color-surface-secondary);
+  padding: 20px 24px;
+  border-top: none;
+  background: transparent;
 }
 
 /* ===== PROTOKOLL-PANEL RECHTS ===== */
@@ -4780,25 +4894,26 @@ p {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--color-divider);
-  background: var(--color-surface-secondary);
+  padding: 20px 24px;
+  border-bottom: none;
+  background: transparent;
 }
 
 .call-protocol-header h3 {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   margin: 0;
   color: var(--color-text-primary);
+  letter-spacing: -0.2px;
 }
 
 .protocol-badge {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  padding: 4px 8px;
-  background: var(--color-success);
-  color: white;
-  border-radius: 4px;
+  padding: 4px 10px;
+  background: rgba(10, 132, 255, 0.1);
+  color: var(--color-primary);
+  border-radius: 20px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -4806,33 +4921,34 @@ p {
 .call-protocol-content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .protocol-message {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px;
-  border-radius: 8px;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
   animation: fadeIn 0.3s ease-out;
+  border: none;
 }
 
 .protocol-message-caller {
-  background: rgba(10, 132, 255, 0.08);
-  border-left: 3px solid var(--color-primary);
+  background: rgba(10, 132, 255, 0.05);
+  border: 1px solid rgba(10, 132, 255, 0.1);
 }
 
 .protocol-message-system {
-  background: var(--color-surface-secondary);
-  border-left: 3px solid var(--color-text-tertiary);
-  font-size: 12px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  font-size: 10px;
   font-style: italic;
-  color: var(--color-text-secondary);
-  padding: 8px 12px;
+  color: var(--color-text-tertiary);
+  padding: 6px 10px;
 }
 
 .protocol-message-header {
@@ -4842,19 +4958,21 @@ p {
 }
 
 .protocol-sender {
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--color-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
 .protocol-time {
-  font-size: 11px;
+  font-size: 9px;
   color: var(--color-text-tertiary);
 }
 
 .protocol-message-text {
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--color-text-primary);
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -4862,42 +4980,45 @@ p {
 
 .call-protocol-footer {
   display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--color-divider);
-  background: var(--color-surface-secondary);
+  gap: 10px;
+  padding: 20px 24px;
+  border-top: none;
+  background: transparent;
 }
 
 .protocol-input {
   flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 12px 16px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  font-size: 14px;
   font-family: var(--font-family);
-  background: var(--color-surface);
+  background: rgba(0, 0, 0, 0.02);
   color: var(--color-text-primary);
-  transition: border-color 0.2s;
+  transition: all 0.2s;
 }
 
 .protocol-input:focus {
   outline: none;
   border-color: var(--color-primary);
+  background: var(--color-surface);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.1);
 }
 
 .protocol-input:disabled {
-  background: var(--color-surface-secondary);
+  background: rgba(0, 0, 0, 0.02);
   color: var(--color-text-tertiary);
   cursor: not-allowed;
+  border-color: transparent;
 }
 
 .protocol-send-btn {
-  padding: 8px 16px;
+  padding: 12px 20px;
   background: var(--color-primary);
   color: white;
   border: none;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: 10px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
@@ -4906,12 +5027,153 @@ p {
 .protocol-send-btn:hover:not(:disabled) {
   background: #0056b3;
   transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
 }
 
 .protocol-send-btn:disabled {
-  background: var(--color-surface-secondary);
+  background: rgba(0, 0, 0, 0.05);
   color: var(--color-text-tertiary);
   cursor: not-allowed;
+}
+
+/* =====================================================
+   🔷 DIALOG SYSTEM (911/112 Operator Style)
+   ===================================================== */
+
+/* Location Unknown Overlay */
+.call-location-unknown {
+  position: relative;
+  background: linear-gradient(135deg, rgba(240, 242, 245, 0.95) 0%, rgba(230, 235, 240, 0.98) 100%);
+  backdrop-filter: blur(8px);
+}
+
+.location-unknown-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  z-index: 10;
+}
+
+.location-unknown-icon {
+  font-size: 48px;
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+
+.location-unknown-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.location-unknown-hint {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
+/* Dialog Questions Footer (im Anrufverlauf) */
+.dialog-questions-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden; /* Verhindert horizontales Abschneiden */
+  padding: 4px 8px 4px 4px; /* Mehr Padding rechts für Transform */
+  pointer-events: auto;
+  position: relative;
+  z-index: 5;
+}
+
+.dialog-question-btn-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: white;
+  border: 1.5px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 11px;
+  line-height: 1.3;
+  width: calc(100% - 6px); /* Platz für Transform-Animation */
+  font-family: var(--font-family);
+  pointer-events: auto;
+  position: relative;
+  z-index: 10;
+}
+
+.dialog-question-btn-footer:hover {
+  background: rgba(10, 132, 255, 0.04);
+  border-color: rgba(10, 132, 255, 0.3);
+  transform: translateX(3px); /* Reduziert von 4px auf 3px */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.dialog-question-btn-footer:active {
+  transform: translateX(1px); /* Reduziert von 2px auf 1px */
+}
+
+.dialog-question-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.dialog-question-text {
+  flex: 1;
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+/* Category-specific colors */
+.dialog-category-location:hover {
+  background: rgba(255, 149, 0, 0.04);
+  border-color: rgba(255, 149, 0, 0.3);
+}
+
+.dialog-category-incident_type:hover {
+  background: rgba(255, 59, 48, 0.04);
+  border-color: rgba(255, 59, 48, 0.3);
+}
+
+.dialog-category-danger:hover {
+  background: rgba(255, 204, 0, 0.08);
+  border-color: rgba(255, 204, 0, 0.4);
+}
+
+.dialog-category-persons:hover {
+  background: rgba(10, 132, 255, 0.04);
+  border-color: rgba(10, 132, 255, 0.3);
+}
+
+.dialog-category-description:hover {
+  background: rgba(142, 142, 147, 0.04);
+  border-color: rgba(142, 142, 147, 0.3);
+}
+
+.dialog-category-general:hover {
+  background: rgba(90, 200, 250, 0.04);
+  border-color: rgba(90, 200, 250, 0.3);
+}
+
+/* Protocol Message Styles für Dispatcher */
+.protocol-message-dispatcher {
+  background: rgba(10, 132, 255, 0.06);
+  border-left: 3px solid var(--color-primary);
+}
+
+.protocol-message-dispatcher .protocol-sender {
+  color: var(--color-primary);
+  font-weight: 600;
 }
 
 .call-modal-button {
@@ -5085,6 +5347,35 @@ p {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.vehicle-selection-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.vehicle-status-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: white;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.vehicle-status-text {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6152,13 +6443,15 @@ p {
 }
 
 .vehicle-icon-img.vehicle-icon-blaulicht-on {
-  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.4)) 
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.4))
           drop-shadow(0 0 8px rgba(10, 132, 255, 0.8));
 }
 
+/* ❌ DEAKTIVIERT: Verhindert Klicks auf Fahrzeuge
 .vehicle-marker-container img {
   pointer-events: none;
 }
+*/
 
 /* ===== VEHICLE FILTER BUTTONS ===== */
 .vehicle-filters {
@@ -7712,19 +8005,18 @@ p {
 /* ===== APPLE-STYLE ROUNDED MODAL ===== */
 
 /* Modal mit Apple-typischer Abrundung */
+/* Border-Radius wird vom Container gesteuert - keine eigenen Ecken */
 .call-modal {
-  border-radius: 20px !important;
-  overflow: hidden;
+  border-radius: 0;
+  overflow: visible;
 }
 
-/* Header mit weichen Ecken oben */
 .call-modal-header {
-  border-radius: 20px 20px 0 0;
+  border-radius: 0;
 }
 
-/* Footer mit weichen Ecken unten */
 .call-modal-footer {
-  border-radius: 0 0 20px 20px;
+  border-radius: 0;
 }
 
 /* Modal Overlay - etwas transparenter */
@@ -7956,11 +8248,7 @@ p {
 
 /* ===== MINI-MAP FIX - Vollständig sichtbar ===== */
 
-/* CallModal - kein overflow hidden */
-.call-modal {
-  overflow: visible !important;
-}
-
+/* CallModal Body - scrollbar erlauben */
 .call-modal-body {
   overflow-y: auto !important;
   overflow-x: visible !important;
@@ -10215,3 +10503,339 @@ select:focus {
   opacity: 0.8;
   transition: opacity var(--transition-fast);
 }
+
+
+/* ============================================================================
+   🚔 PATROL SYSTEM STYLING
+   ============================================================================ */
+
+/* Patrol Buttons */
+.patrol-btn {
+  width: 100%;
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-sm);
+  border: none;
+  border-radius: var(--radius-md);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: var(--transition-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+}
+
+.patrol-start-btn {
+  background: linear-gradient(135deg, #30D158, #28A745);
+  color: white;
+}
+
+.patrol-start-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #28A745, #30D158);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(48, 209, 88, 0.3);
+}
+
+.patrol-start-btn:disabled {
+  background: #8E8E93;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.patrol-stop-btn {
+  background: linear-gradient(135deg, #FF9F0A, #FF8C00);
+  color: white;
+}
+
+.patrol-stop-btn:hover {
+  background: linear-gradient(135deg, #FF8C00, #FF9F0A);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 159, 10, 0.3);
+}
+
+/* Patrol Info Box */
+.patrol-info {
+  background: rgba(48, 209, 88, 0.1);
+  border: 1px solid rgba(48, 209, 88, 0.3);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+}
+
+.patrol-info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--spacing-xs) 0;
+}
+
+.patrol-info-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.patrol-info-value {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Loading State für Patrol Button */
+.patrol-btn.loading {
+  opacity: 0.8;
+  cursor: wait;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+   PATROL AREA SELECTOR - CLEAN STYLE
+   ============================================================================ */
+
+.patrol-selector-panel-clean {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 90%;
+  max-width: 800px;
+  max-height: 85vh;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  z-index: 2001;
+  overflow: hidden;
+  animation: fadeInSmooth 0.15s ease-out;
+}
+
+.patrol-selector-header-clean {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 24px 24px 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+}
+
+.patrol-selector-title-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.patrol-selector-title-section h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d1d1f;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.patrol-selector-subtitle {
+  font-size: 13px;
+  font-weight: 400;
+  color: #86868b;
+  margin: 0;
+}
+
+.patrol-selector-content-clean {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.patrol-areas-grid-clean {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.patrol-area-card-clean {
+  background: #f5f5f7;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.patrol-area-card-clean:hover:not(.inactive) {
+  background: #ebebed;
+  transform: translateY(-1px);
+}
+
+.patrol-area-card-clean.selected {
+  border-color: #30D158;
+  background: rgba(48, 209, 88, 0.08);
+}
+
+.patrol-area-card-clean.inactive {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.patrol-area-header-clean {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.patrol-area-name-clean {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d1d1f;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.patrol-area-priority-badge {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.patrol-area-description-clean {
+  font-size: 12px;
+  color: #6e6e73;
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+  min-height: 32px;
+}
+
+.patrol-area-details-clean {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.patrol-area-detail-row-clean {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.patrol-area-detail-row-clean .label-clean {
+  color: #86868b;
+  font-weight: 400;
+}
+
+.patrol-area-detail-row-clean .value-clean {
+  color: #1d1d1f;
+  font-weight: 500;
+}
+
+.patrol-area-inactive-overlay-clean {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #86868b;
+}
+
+.patrol-area-selected-indicator-clean {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+
+.patrol-selector-footer-clean {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+}
+
+.patrol-selector-btn-clean {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.patrol-selector-btn-secondary {
+  background: #f5f5f7;
+  color: #1d1d1f;
+}
+
+.patrol-selector-btn-secondary:hover {
+  background: #e8e8ed;
+}
+
+.patrol-selector-btn-primary {
+  background: #30D158;
+  color: white;
+}
+
+.patrol-selector-btn-primary:hover:not(:disabled) {
+  background: #28a745;
+}
+
+.patrol-selector-btn-primary:disabled {
+  background: #d1d1d6;
+  color: #86868b;
+  cursor: not-allowed;
+}
+
+/* Scrollbar für Patrol Selector */
+.patrol-selector-content-clean::-webkit-scrollbar {
+  width: 6px;
+}
+
+.patrol-selector-content-clean::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.patrol-selector-content-clean::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+}
+
+.patrol-selector-content-clean::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* ============================================================================
+   END PATROL SYSTEM STYLING
+   ============================================================================ */

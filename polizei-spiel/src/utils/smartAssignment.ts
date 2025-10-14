@@ -140,6 +140,12 @@ export function evaluateVehicleSuitability(
     reasons.push('Wartung fällig');
   }
 
+  // 8. 🚔 PATROL-BONUS: Fahrzeug auf Streife in der Nähe = Bonus
+  if (vehicle.isOnPatrol && distanceKm < 3) {
+    score += 15; // +15 Punkte wenn Streife nah am Einsatz
+    reasons.push(`🚔 Auf Streife in der Nähe (+15 Bonus)`);
+  }
+
   // Score normalisieren (min 0, max 100)
   score = Math.max(0, Math.min(SMART_ASSIGNMENT_BASE_SCORE, score));
 
