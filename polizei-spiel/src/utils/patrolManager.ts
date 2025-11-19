@@ -11,8 +11,8 @@
  */
 
 import type { Vehicle, WeatherType } from '../types';
-import type { PatrolRoute, PatrolDiscovery, PatrolType, VehiclePatrolState } from '../types/patrol';
-import { generatePatrolRoute, estimateRouteDistance } from './patrolRouteGenerator';
+import type { PatrolRoute, PatrolDiscovery, PatrolType } from '../types/patrol';
+import { generatePatrolRoute } from './patrolRouteGenerator';
 import { calculateDistance } from '../services/routingService';
 import {
   PATROL_MIN_FUEL_REQUIRED,
@@ -26,7 +26,6 @@ import {
   DISCOVERY_CHECK_INTERVAL,
   PRESENCE_BONUS_PER_PATROL,
   PRESENCE_BONUS_MAX,
-  PATROL_PAUSE_DURATION,
 } from '../constants/patrolConstants';
 import { vehicleTypeConfigs } from '../constants/vehicleTypes';
 
@@ -100,7 +99,7 @@ export async function startPatrol(
 /**
  * Stoppt Streifenfahrt
  */
-export function stopPatrol(vehicle: Vehicle): void {
+export function stopPatrol(): void {
   // Route wird im Parent (App.tsx) auf null gesetzt
   // Hier nur Cleanup falls nötig
 }
@@ -134,12 +133,15 @@ export function updatePatrolMovement(
   if (!nextRoutePoint) {
     // 🎲 RANDOM PATROL: Nach jeder Route wird eine NEUE Route generiert!
     // Das Fahrzeug fährt nicht die gleiche Route, sondern bekommt neue Ziele
-    console.log(`[PATROL] Route beendet - Neue Route wird generiert (Random Patrol)`);
+
+    // ✅ WICHTIG: Nutze die LETZTE Position der Route, nicht vehicle.position!
+    const lastPosition = fullRoute[currentRouteIndex] || vehicle.position;
+    console.log(`[PATROL] Route beendet an Position [${lastPosition[0].toFixed(4)}, ${lastPosition[1].toFixed(4)}] - Neue Route wird generiert (Random Patrol)`);
 
     // Signal an Parent: Route beendet, neue Route muss generiert werden
     // routeCompleted = true triggert die Neu-Generierung in App.tsx
     return {
-      newPosition: vehicle.position, // Aktuelle Position beibehalten
+      newPosition: lastPosition, // ✅ LETZTE Position der Route (Format: [lat, lng])
       newWaypointIndex: currentRouteIndex,
       routeCompleted: true, // ✅ Triggert Neu-Generierung der Route
       isPaused: false,
@@ -402,7 +404,7 @@ export function calculatePatrolFuelConsumption(
  * Berechnet Müdigkeitsanstieg während Streifenfahrt
  */
 export function calculatePatrolFatigue(
-  vehicle: Vehicle,
+  _vehicle: Vehicle,
   deltaTime: number // Sekunden
 ): number {
   // Basis-Müdigkeit: 5% pro Stunde = 0.0014% pro Sekunde

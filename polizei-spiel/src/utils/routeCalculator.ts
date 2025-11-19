@@ -1,3 +1,15 @@
+// ⚠️⚠️⚠️ KRITISCHE DATEI - NICHT ÄNDERN! ⚠️⚠️⚠️
+// Diese Datei ist die ORIGINAL-VERSION aus dem ersten Commit (0f18d96)
+// Jegliche Änderungen hier brechen das Routing-System!
+//
+// WICHTIG:
+// - calculateStraightRoute() wendet convertToLeafletFormat() auf das Ergebnis an
+// - getStraightLineRoute() gibt bereits [lat, lng] zurück
+// - calculateRoute() nutzt OSRM für Straßen, Luftlinie für Helis
+//
+// Bei Problemen: `git show 0f18d96:polizei-spiel/src/utils/routeCalculator.ts`
+// ⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 // Zentralisierte Route-Berechnungs-Logik
 
 import { getRoute, convertToLeafletFormat, getStraightLineRoute, calculateDistance } from '../services/routingService';
@@ -54,17 +66,10 @@ export const calculateRoute = async (
   try {
     const osrmRoute = await getRoute(from, to);
 
-    console.log('[OSRM] Antwort erhalten:', osrmRoute ? 'Ja' : 'Nein');
-    if (osrmRoute) {
-      console.log('[OSRM] Coordinates:', osrmRoute.coordinates?.length || 0, 'Punkte');
-      console.log('[OSRM] Distance:', osrmRoute.distance);
-    }
-
     if (osrmRoute && osrmRoute.coordinates && osrmRoute.distance) {
       const path = convertToLeafletFormat(osrmRoute.coordinates);
 
       console.log(`[OSRM SUCCESS] Route berechnet: ${path.length} Punkte, ${(osrmRoute.distance / 1000).toFixed(2)}km`);
-      console.log('[OSRM SUCCESS] Erste 3 Punkte:', path.slice(0, 3));
 
       // ⚡ Performance #8: Speichere im Cache
       routeCache.set(startPos, endPos, path, osrmRoute.duration || 0, osrmRoute.distance);
@@ -83,9 +88,6 @@ export const calculateRoute = async (
   // Fallback: Luftlinie
   console.log('[FALLBACK] Nutze Luftlinie als Fallback');
   const result = calculateStraightRoute(from, to);
-  console.log('[FALLBACK] Route erstellt:', result.path.length, 'Punkte');
-  console.log('[FALLBACK] Erste 3 Punkte:', result.path.slice(0, 3));
-  console.log('[FALLBACK] Distance:', result.distance);
   routeCache.set(startPos, endPos, result.path, 0, result.distance);
   return result;
 };
@@ -105,9 +107,8 @@ export const calculateStraightRoute = (
   const straightRoute = getStraightLineRoute(from, to, points);
   const distance = calculateDistance(from, to);
 
-  // TEMPORARY FIX: getStraightLineRoute gibt bereits [lat, lng] zurück
   return {
-    path: straightRoute,
+    path: convertToLeafletFormat(straightRoute),
     distance,
   };
 };

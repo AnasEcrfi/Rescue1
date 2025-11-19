@@ -1,14 +1,15 @@
 // Log Entry Types - Zentralisierte Definition
 
-export type LogEntryType = 
-  | 'assignment' 
-  | 'arrival' 
-  | 'completion' 
-  | 'failed' 
-  | 'new' 
+export type LogEntryType =
+  | 'assignment'
+  | 'arrival'
+  | 'completion'
+  | 'failed'
+  | 'new'
   | 'system'
   | 'escalation'
-  | 'call';
+  | 'call'
+  | 'radio';
 
 export interface LogEntry {
   id: number;

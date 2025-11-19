@@ -31,14 +31,6 @@ const StatisticsModal: React.FC<StatisticsModalProps> = ({ isOpen, onClose, stat
     ? (stats.totalResponseTimes.reduce((a, b) => a + b, 0) / stats.totalResponseTimes.length).toFixed(1)
     : '0.0';
 
-  const longestResponse = stats.totalResponseTimes.length > 0
-    ? Math.max(...stats.totalResponseTimes).toFixed(1)
-    : '0.0';
-
-  const shortestResponse = stats.totalResponseTimes.length > 0
-    ? Math.min(...stats.totalResponseTimes).toFixed(1)
-    : '0.0';
-
   const distanceKm = (stats.totalDistance / 1000).toFixed(2);
 
   return (

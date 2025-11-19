@@ -1,4 +1,4 @@
-import React, { Component, ReactNode } from 'react';
+import React, { Component, type ReactNode } from 'react';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -150,7 +150,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
  */
 export class CompactErrorBoundary extends ErrorBoundary {
   render(): ReactNode {
-    const { hasError, error } = this.state;
+    const { hasError } = this.state;
     const { children, componentName } = this.props;
 
     if (hasError) {

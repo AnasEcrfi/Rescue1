@@ -94,7 +94,6 @@ const BackupModal: React.FC<BackupModalProps> = ({
               </div>
             ) : (
               availableVehicles.slice(0, 12).map((vehicle) => {
-                const config = vehicleTypeConfigs[vehicle.vehicleType];
                 const isSelected = selectedVehicles.includes(vehicle.id);
 
                 // Status-Badge wie im CallModal (App.tsx getStatusBadge)

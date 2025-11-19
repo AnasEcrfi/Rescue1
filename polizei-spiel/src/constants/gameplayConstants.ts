@@ -468,33 +468,33 @@ export const MAP_ZOOM_DURATION = 0.5; // 0.5 Sekunden
 
 /**
  * Kosten für Tanken
- * Durchschnittlich 50-70 Liter × 1.80 EUR = ~100 EUR
+ * ⚖️ BALANCED: Reduziert von 10 auf 5 (Einnahmen: ~60/h, Ausgaben waren ~80/h)
  */
-export const REFUEL_COST = 10; // Punkte (Score-Abzug)
+export const REFUEL_COST = 5; // Punkte (Score-Abzug) - War 10
 
 /**
  * Minimale Reparatur-Kosten
- * Kleine Reparaturen, Inspektion
+ * ⚖️ BALANCED: Reduziert von 20 auf 10
  */
-export const REPAIR_COST_MIN = 20; // Punkte
+export const REPAIR_COST_MIN = 10; // Punkte - War 20
 
 /**
  * Maximale Reparatur-Kosten
- * Große Reparaturen, Unfallschaden
+ * ⚖️ BALANCED: Reduziert von 50 auf 30
  */
-export const REPAIR_COST_MAX = 50; // Punkte
+export const REPAIR_COST_MAX = 30; // Punkte - War 50
 
 /**
  * Kosten für Crew-Pause
- * Überstunden-Zuschlag für Bereitschaftsbesatzung
+ * ⚖️ BALANCED: Reduziert von 5 auf 3
  */
-export const CREW_BREAK_COST = 5; // Punkte
+export const CREW_BREAK_COST = 3; // Punkte - War 5
 
 /**
  * Kosten für Schichtwechsel
- * Administrative Kosten, Übergabe
+ * ⚖️ BALANCED: Reduziert von 5 auf 3
  */
-export const SHIFT_CHANGE_COST = 5; // Punkte
+export const SHIFT_CHANGE_COST = 3; // Punkte - War 5
 
 // ============================================================================
 // SCHWIERIGKEITSGRAD-MULTIPLIKATOREN

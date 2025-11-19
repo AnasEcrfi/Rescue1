@@ -1,4 +1,18 @@
+// ⚠️⚠️⚠️ KRITISCHE DATEI - NICHT ÄNDERN! ⚠️⚠️⚠️
+// Diese Datei ist die ORIGINAL-VERSION aus dem ersten Commit (0f18d96)
+// Jegliche Änderungen hier brechen das Routing-System!
+//
+// WICHTIG:
+// - getStraightLineRoute() gibt [lat, lng] Format zurück
+// - getRoute() cached INTERN (nicht extern!)
+// - convertToLeafletFormat() konvertiert [lng, lat] → [lat, lng]
+//
+// Bei Problemen: `git show 0f18d96:polizei-spiel/src/services/routingService.ts`
+// ⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 // OSRM Routing Service für echte Straßen-Navigation
+
+import { routeCache } from '../utils/routeCache';
 
 const OSRM_BASE_URL = 'https://router.project-osrm.org/route/v1/driving';
 
@@ -20,7 +34,21 @@ export interface OSRMRoute {
  * @returns Route mit Koordinaten, Distanz und Dauer
  */
 export async function getRoute(start: RoutePoint, end: RoutePoint): Promise<OSRMRoute | null> {
-  console.log('📡 Lade Route von OSRM API');
+  // ⚡ 1. Prüfe Cache
+  const cacheKey: [number, number] = [start.lat, start.lng];
+  const cacheEnd: [number, number] = [end.lat, end.lng];
+  const cached = routeCache.get(cacheKey, cacheEnd);
+
+  if (cached) {
+    console.log('⚡ CACHE HIT: Route aus Cache geladen');
+    return {
+      coordinates: cached.route,
+      distance: cached.distance,
+      duration: cached.duration,
+    };
+  }
+
+  console.log('📡 CACHE MISS: Lade Route von OSRM API');
 
   try {
     // OSRM erwartet Koordinaten im Format: lng,lat;lng,lat
@@ -47,12 +75,14 @@ export async function getRoute(start: RoutePoint, end: RoutePoint): Promise<OSRM
     const route = data.routes[0];
 
     const result: OSRMRoute = {
-      coordinates: route.geometry.coordinates, // [lng, lat] format from OSRM
+      coordinates: route.geometry.coordinates, // [lng, lat] format
       distance: route.distance,
       duration: route.duration,
     };
 
-    console.log('✓ OSRM Route empfangen');
+    // ⚡ 2. Speichere im Cache
+    routeCache.set(cacheKey, cacheEnd, result.coordinates, result.duration, result.distance);
+    console.log('💾 Route im Cache gespeichert');
 
     return result;
   } catch (error) {
@@ -144,7 +174,7 @@ export function calculateBearing(start: [number, number], end: [number, number])
  * Fallback: Realistische Route mit Straßen-Simulation wenn OSRM nicht verfügbar
  * Erstellt eine Route die echte Straßenverläufe mit Abbiegungen simuliert
  */
-export function getStraightLineRoute(start: RoutePoint, end: RoutePoint, steps: number = 50): [number, number][] {
+export function getStraightLineRoute(start: RoutePoint, end: RoutePoint, _steps: number = 50): [number, number][] {
   console.log('🛣️ Erstelle Fallback-Route mit Kurven/Abbiegungen');
   const route: [number, number][] = [];
 
@@ -182,7 +212,7 @@ export function getStraightLineRoute(start: RoutePoint, end: RoutePoint, steps: 
       lat += noise;
       lng += noise;
 
-      route.push([lat, lng]); // TEMPORARY FIX: Zurück zu [lat, lng]
+      route.push([lat, lng]);
     }
   } else {
     // Diagonale Route mit realistischen Kurven
@@ -209,7 +239,7 @@ export function getStraightLineRoute(start: RoutePoint, end: RoutePoint, steps: 
       const lat = baseLat + Math.cos(perpAngle) * totalOffset;
       const lng = baseLng + Math.sin(perpAngle) * totalOffset;
 
-      route.push([lat, lng]); // TEMPORARY FIX: Zurück zu [lat, lng]
+      route.push([lat, lng]);
     }
   }
 

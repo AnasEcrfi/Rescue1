@@ -56,6 +56,7 @@ export const LogFilters: React.FC<LogFiltersProps> = ({ logs, onFilterChange }) 
       completion: logs.filter(l => l.type === 'completion').length,
       escalation: logs.filter(l => l.type === 'escalation').length,
       call: logs.filter(l => l.type === 'call').length,
+      radio: logs.filter(l => l.type === 'radio').length,
       failed: logs.filter(l => l.type === 'failed').length,
       new: logs.filter(l => l.type === 'new').length,
       system: logs.filter(l => l.type === 'system').length,

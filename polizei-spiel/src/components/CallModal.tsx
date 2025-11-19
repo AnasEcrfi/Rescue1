@@ -3,7 +3,6 @@ import { MapContainer, TileLayer, Marker, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import type { Call, Vehicle } from '../types';
 import type { DialogOption } from '../types/dialogSystem';
-import { vehicleTypeConfigs } from '../constants/vehicleTypes';
 import { calculateDistance } from '../services/routingService';
 import { realisticSoundManager } from '../utils/realisticSoundManager';
 import { dialogTemplates } from '../constants/dialogTemplates';
@@ -57,16 +56,13 @@ const CallModal: React.FC<CallModalProps> = ({
 
     // Dialog-Modus: Type the LAST caller message
     let fullText: string;
-    let messageId: string | undefined;
     if (call.dialogState?.isActive) {
       // Finde die letzte Caller-Nachricht
       const messages = call.dialogState.messagesHistory;
       const lastCallerMessage = [...messages].reverse().find(m => m.sender === 'caller');
       fullText = lastCallerMessage?.text || call.callerText;
-      messageId = lastCallerMessage?.id;
     } else {
       fullText = call.callerText;
-      messageId = undefined;
     }
 
     let currentIndex = 0;
@@ -161,7 +157,7 @@ const CallModal: React.FC<CallModalProps> = ({
         <div className="call-modal-info">
           <div className="call-info-row">
             <span className="call-info-label">Anrufertyp:</span>
-            <span className="call-info-value">{getCallerTypeLabel(call.callerType)}</span>
+            <span className="call-info-value">{getCallerTypeLabel(call.callerType || 'unknown')}</span>
           </div>
           {call.callerName && (
             <div className="call-info-row">
@@ -313,7 +309,6 @@ const CallModal: React.FC<CallModalProps> = ({
                   </div>
                 ) : (
                   availableVehicles.slice(0, 12).map((vehicle) => {
-                    const config = vehicleTypeConfigs[vehicle.vehicleType];
                     const isSelected = selectedVehicles.includes(vehicle.id);
 
                     // Status-Badge wie im Rest des Spiels (App.tsx getStatusBadge)
@@ -434,7 +429,7 @@ const CallModal: React.FC<CallModalProps> = ({
                     <div className="protocol-message-header">
                       <span className="protocol-sender">
                         {message.sender === 'caller'
-                          ? call.callerName || getCallerTypeLabel(call.callerType)
+                          ? call.callerName || getCallerTypeLabel(call.callerType || 'unknown')
                           : message.sender === 'dispatcher'
                           ? 'Leitstelle'
                           : 'System'}
@@ -470,7 +465,7 @@ const CallModal: React.FC<CallModalProps> = ({
               <div className="protocol-message protocol-message-caller">
                 <div className="protocol-message-header">
                   <span className="protocol-sender">
-                    {call.callerName || getCallerTypeLabel(call.callerType)}
+                    {call.callerName || getCallerTypeLabel(call.callerType || 'unknown')}
                   </span>
                   <span className="protocol-time">vor {timeAgo}s</span>
                 </div>

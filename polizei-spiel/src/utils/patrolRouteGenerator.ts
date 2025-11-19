@@ -31,7 +31,7 @@ import { calculateRoute } from './routeCalculator';
 
 /**
  * Generiert eine komplette Streifenroute
- * @param vehiclePosition - Aktuelle Position des Fahrzeugs
+ * @param vehiclePosition - Aktuelle Position des Fahrzeugs (wird als Startpunkt verwendet!)
  * @param gameTime - Aktuelle Spielzeit
  * @param hour - Aktuelle Stunde
  * @param weather - Aktuelles Wetter
@@ -46,19 +46,28 @@ export async function generatePatrolRoute(
   type?: PatrolType,
   areaId?: string
 ): Promise<PatrolRoute> {
+  console.log(`[PATROL GENERATOR] Generiere Route von Position [${vehiclePosition[0].toFixed(4)}, ${vehiclePosition[1].toFixed(4)}]`);
+
   // 1. Wähle Patrol Area (entweder spezifische oder smart selection)
   const area = areaId
     ? frankfurtPatrolAreas.find(a => a.id === areaId) || selectPatrolArea(hour, type)
     : selectPatrolArea(hour, type);
 
+  console.log(`[PATROL GENERATOR] Gebiet: ${area.name} (${area.id})`);
+
   // 2. Bestimme Patrol Type (falls nicht vorgegeben)
   const patrolType = type || determinePatrolType(area, hour);
 
-  // 3. Generiere Waypoints
+  // 3. Generiere Waypoints (inkl. vehiclePosition als Start!)
   const waypoints = generateWaypoints(area, vehiclePosition, patrolType);
 
+  console.log(`[PATROL GENERATOR] ${waypoints.length} Waypoints generiert, Start: [${waypoints[0][0].toFixed(4)}, ${waypoints[0][1].toFixed(4)}]`);
+
   // 4. Berechne komplette Straßenroute zwischen allen Waypoints
+  // WICHTIG: Diese Route startet an vehiclePosition (waypoints[0])!
   const fullRoute = await generateFullStreetRoute(waypoints);
+
+  console.log(`[PATROL GENERATOR] FullRoute erstellt: ${fullRoute.length} Punkte, Start: [${fullRoute[0][0].toFixed(4)}, ${fullRoute[0][1].toFixed(4)}]`);
 
   // 5. Bestimme Geschwindigkeit
   const speed = calculatePatrolSpeed(patrolType, hour, weather);
@@ -75,7 +84,7 @@ export async function generatePatrolRoute(
     type: patrolType,
     waypoints,
     fullRoute,
-    currentWaypointIndex: 0,
+    currentWaypointIndex: 0, // ✅ Start bei 0, weil fullRoute[0] = vehiclePosition
     speed,
     duration,
     startTime: gameTime,
@@ -108,8 +117,26 @@ async function generateFullStreetRoute(waypoints: [number, number][]): Promise<[
     const from = { lat: waypoints[i][0], lng: waypoints[i][1] };
     const to = { lat: waypoints[i + 1][0], lng: waypoints[i + 1][1] };
 
+    // 🐌 RATE LIMITING: Kurze Pause zwischen Requests (200ms)
+    // Verhindert, dass OSRM API uns blockt
+    if (i > 0) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
     try {
       const routeData = await calculateRoute(from, to, false);
+
+      // 🔍 DEBUG: Prüfe Format der Route
+      if (routeData.path.length > 0) {
+        const firstPoint = routeData.path[0];
+        // Frankfurt: lat ~50, lng ~8-9
+        // Wenn firstPoint[0] < 20, dann ist es vermutlich [lng, lat] statt [lat, lng]
+        if (firstPoint[0] < 20 && firstPoint[1] > 40) {
+          console.warn(`[PATROL] ⚠️ Route hat falsches Format [lng, lat], korrigiere zu [lat, lng]`);
+          // Vertausche alle Koordinaten
+          routeData.path = routeData.path.map(([a, b]) => [b, a] as [number, number]);
+        }
+      }
 
       // Füge die Route hinzu (ohne den letzten Punkt, um Duplikate zu vermeiden)
       if (i === 0) {

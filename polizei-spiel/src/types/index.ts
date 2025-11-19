@@ -70,6 +70,8 @@ export interface Vehicle {
   fuelLevel: number; // Tankfüllung 0-100%
   crewFatigue: number; // Crew-Müdigkeit 0-100% (0 = frisch, 100 = erschöpft)
   maintenanceStatus: 'ok' | 'warning' | 'critical'; // Wartungszustand
+  maintenanceLevel?: number; // Numerischer Wartungslevel 0-100%
+  lastStatusChange?: number; // Zeitpunkt des letzten Status-Wechsels (für S2→S1 Auto-Transition)
   lastRefuelTime: number; // Letztes Tanken (gameTime)
   lastBreakTime: number; // Letzte Pause (gameTime)
   shiftStartTime: number; // Schichtbeginn (gameTime)
@@ -77,7 +79,8 @@ export interface Vehicle {
   activeDispatchTimeout?: ReturnType<typeof setTimeout>; // 🔒 BUG FIX #3: Timeout-ID für Cleanup
   callsign?: string; // Funkrufname (z.B. "Frank 1/47-01")
   // 🚔 PATROL SYSTEM (Streifenfahrt)
-  isOnPatrol: boolean; // Aktuell auf Streife
+  isPatrolling: boolean; // Aktuell auf Streife
+  isOnPatrol: boolean; // Aktuell auf Streife (Alias für isPatrolling)
   patrolRoute: import('./patrol').PatrolRoute | null; // Aktuelle Streifenroute
   patrolAreaId: string | null; // 🎯 Zugewiesenes Patrol-Gebiet (bleibt konstant während Streife)
   patrolStartTime: number | null; // Start der Streife (gameTime)
@@ -101,7 +104,7 @@ export interface Call {
   callerName?: string;
   callbackNumber?: string;
   address?: string;
-  status?: 'waiting' | 'rejected' | 'accepted';
+  status?: 'waiting' | 'rejected' | 'accepted' | 'answered';
   // MANV-Informationen
   isMANV?: boolean;
   involvedCount?: number;
@@ -172,6 +175,7 @@ export interface Incident {
   status?: 'active' | 'completed' | 'failed'; // Status des Einsatzes
   completedAt?: number; // Zeitpunkt des Abschlusses (Date.now())
   pointsAwarded?: number; // Vergebene Punkte
+  priorityUpgraded?: boolean; // Wurde Priorität bereits erhöht? (für Priority-Degradation)
 }
 
 export interface Achievement {

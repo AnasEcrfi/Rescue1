@@ -5,7 +5,6 @@
 
 class HTMLAudioManager {
   private isEnabled: boolean = true;
-  private audioCache: Map<string, HTMLAudioElement> = new Map();
 
   /**
    * Erstellt einen einfachen Beep-Sound als Data URL

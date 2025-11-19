@@ -10,4 +10,9 @@ export interface Statistics {
   currentStreak: number;
   bestStreak: number;
   totalDistance: number;
+  // Patrol Statistics
+  totalPatrols: number;
+  totalPatrolTime: number;
+  totalDiscoveries: number;
+  totalPatrolDistance: number;
 }

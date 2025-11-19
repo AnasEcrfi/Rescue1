@@ -68,6 +68,9 @@ Darin enthalten:
 - 🚀 Deployment-Empfehlungen
 - 📝 Changelog
 
+### 🚨 Wichtig für Entwickler:
+Lies unbedingt **[ROUTING_SYSTEM.md](ROUTING_SYSTEM.md)** bevor du am Routing-Code arbeitest!
+
 ---
 
 ## 🎯 Schwierigkeitsgrade
@@ -125,6 +128,12 @@ React 18 + TypeScript + Vite
 ├── PropCop Sounds (Audio)
 └── Custom CSS (Apple Design)
 ```
+
+### 🧪 Routing-System validieren:
+```bash
+./validate-routing.sh
+```
+Dieser Befehl prüft, ob das kritische Routing-System intakt ist.
 
 ---
 

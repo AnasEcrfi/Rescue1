@@ -363,7 +363,9 @@ export const useGameStore = create<GameStore>()(
       setDifficulty: (difficulty) => set({ difficulty }, false, 'setDifficulty'),
 
       addScore: (points) => set(
-        (state) => ({ score: state.score + points }),
+        (state) => ({
+          score: state.score + points // ⚖️ Score kann negativ werden (LST-SIM Style)
+        }),
         false,
         'addScore'
       ),

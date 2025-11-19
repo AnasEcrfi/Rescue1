@@ -101,8 +101,15 @@ class RealisticSoundManager {
 
   /**
    * Lädt einen Sound vor (für bessere Performance)
+   * Unterstützt sowohl einzelne Pfade als auch Arrays von Pfaden
    */
-  private async preloadSound(path: string): Promise<void> {
+  private async preloadSound(path: string | string[]): Promise<void> {
+    // Wenn Array, rekursiv alle Sounds laden
+    if (Array.isArray(path)) {
+      await Promise.all(path.map(p => this.preloadSound(p)));
+      return;
+    }
+
     if (this.audioCache.has(path)) return;
 
     try {
@@ -178,7 +185,7 @@ class RealisticSoundManager {
     this.stopBackgroundRadioChatter();
 
     // Stoppe alle Sirenen
-    this.activeSirens.forEach((audio, vehicleId) => {
+    this.activeSirens.forEach((audio) => {
       this.stopSound(audio);
     });
     this.activeSirens.clear();
@@ -406,7 +413,7 @@ class RealisticSoundManager {
    * Dezent und nicht störend - spielt nur einmal ab und fadet aus
    * Wählt zufällig zwischen verschiedenen Sirenen für Abwechslung
    */
-  public async startSirene(vehicleId: number, baseVolume?: number, adaptive: boolean = true): Promise<void> {
+  public async startSirene(vehicleId: number, baseVolume?: number, _adaptive: boolean = true): Promise<void> {
     if (!this.sirenSoundsEnabled) return;
 
     // Wenn Sirene bereits läuft, nicht neu starten
@@ -573,7 +580,7 @@ class RealisticSoundManager {
     if (settings.sirenSoundsEnabled !== undefined) {
       this.sirenSoundsEnabled = settings.sirenSoundsEnabled;
       if (!settings.sirenSoundsEnabled) {
-        this.activeSirens.forEach((audio, id) => this.stopSirene(id));
+        this.activeSirens.forEach((_audio, id) => this.stopSirene(id));
       }
     }
     if (settings.alarmSoundsEnabled !== undefined) this.alarmSoundsEnabled = settings.alarmSoundsEnabled;
@@ -607,13 +614,13 @@ class RealisticSoundManager {
     await this.playSound(this.sounds.ui.buttonClick);
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    await this.playSound(this.sounds.leitstelle.buttonBeep);
+    await this.playSound(this.sounds.leitstelle.buttonBeep[0]);
     await new Promise(resolve => setTimeout(resolve, 500));
 
     await this.playSound(this.sounds.fahrzeug.blaulichtActivate);
     await new Promise(resolve => setTimeout(resolve, 800));
 
-    await this.playSound(this.sounds.funk.pttPress);
+    await this.playSound(this.sounds.funk.pttPress[0]);
     await new Promise(resolve => setTimeout(resolve, 300));
     await this.playSound(this.sounds.funk.pttRelease);
     await new Promise(resolve => setTimeout(resolve, 500));

@@ -19,8 +19,8 @@ import { getRandomCallText, generateCallbackNumber } from './constants/callTexts
 import { getRandomPOI, getPOICategoryForIncident } from './constants/frankfurtPOIs';
 import { getRealisticCallText } from './constants/realisticCallTexts';
 import { getAddressForLocation } from './constants/addresses';
-import { speakRequestMessages, type SpeakRequestReason } from './constants/radioMessages';
-import { incidentReports, getRandomReport, hasBackupRequest, getBackupRequest } from './constants/incidentReports';
+import { speakRequestMessages } from './constants/radioMessages';
+import { incidentReports, getRandomReport } from './constants/incidentReports';
 import CallModal from './components/CallModal';
 import BackupModal from './components/BackupModal';
 import SpeakRequestModal from './components/SpeakRequestModal';
@@ -31,7 +31,6 @@ import { CompactErrorBoundary } from './components/ErrorBoundary';
 import { protocolLogger } from './utils/protocolLogger';
 import type { ProtocolEntry } from './types/protocol';
 import WeatherDisplay from './components/WeatherDisplay';
-import type { WeatherState } from './types/weather';
 import { weatherConditions, getWeatherDuration, getNextWeather, getWeatherOverlayClass } from './constants/weather';
 import { calculateFuelConsumption, calculateCrewFatigue, determineOutOfServiceReason, calculateOutOfServiceDuration, updateMaintenanceStatus, resetVehicleAfterService } from './utils/vehicleTimings';
 import { shouldTriggerMANV, getRandomMANVScenario, generateInvolvedCount } from './constants/manvScenarios';
@@ -46,6 +45,7 @@ import { findNearestGasStation, shouldRefuel, calculateRefuelDuration, performSh
 import { canHelicopterFly } from './constants/weather';
 import { useHotkeys } from './hooks/useHotkeys';
 import VehicleDetails from './components/VehicleDetails';
+import VehicleContextMenu from './components/VehicleContextMenu';
 import { generateFrankfurtCallsign } from './utils/callsigns';
 import { calculateDispatchDelay } from './constants/dispatchTimes';
 import { REFUEL_COST, REPAIR_COST_MIN, REPAIR_COST_MAX, CREW_BREAK_COST, SHIFT_CHANGE_COST } from './constants/gameplayConstants';
@@ -57,10 +57,10 @@ import { isVehicleMoving, isVehicleAvailable } from './utils/vehicleHelpers';
 import { getIncidentById, getIncidentPriorityText, needsMoreVehicles } from './utils/incidentHelpers';
 // 🎮 ZUSTAND STORE IMPORT (Zentrale State Management Migration)
 import { useGameStore } from './stores/gameStore';
-import type { Difficulty } from './types/game';
 // 🚔 PATROL SYSTEM IMPORTS
-import type { PatrolRoute, PatrolDiscovery } from './types/patrol';
-import { startPatrol, stopPatrol, updatePatrolMovement, checkForDiscovery, calculatePresenceBonus, applyPresenceBonusToSpawnChance, calculatePatrolFuelConsumption, calculatePatrolFatigue, canVehiclePatrol } from './utils/patrolManager';
+import type { PatrolDiscovery } from './types/patrol';
+import { startPatrol, stopPatrol, updatePatrolMovement, checkForDiscovery, calculatePresenceBonus, calculatePatrolFuelConsumption, calculatePatrolFatigue, canVehiclePatrol } from './utils/patrolManager';
+import { validateTransition, isTransitionAllowed, getStatusName } from './utils/fmsValidation';
 
 // Fix Leaflet default marker icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -215,14 +215,14 @@ const VehicleMarker: React.FC<VehicleMarkerProps> = ({ position, status, vehicle
 
   // Status colors for label
   const statusColors: Record<VehicleStatus, string> = {
-    'S1': '#30D158',  // Grün - Bereit
-    'S2': '#FFD60A',  // Gelb - Alarmiert
-    'S3': '#FF9F0A',  // Orange - Anfahrt
+    'S1': '#90EE90',  // Hellgrün - Frei auf Funk (LST-SIM Style)
+    'S2': '#228B22',  // Dunkelgrün - Frei auf Wache (LST-SIM Style)
+    'S3': '#FFD60A',  // Gelb - Einsatz übernommen
     'S4': '#FF453A',  // Rot - Am Einsatzort
     'S5': '#0A84FF',  // Blau - Sprechwunsch
     'S6': '#8E8E93',  // Grau - Nicht einsatzbereit
-    'S7': '#FFD60A',  // Gelb - Tanken
-    'S8': '#0A84FF',  // Blau - Rückfahrt
+    'S7': '#FFB6C1',  // Altrosa - Tanken (LST-SIM Style)
+    'S8': '#9370DB',  // Violett - Rückfahrt (LST-SIM Style)
   };
 
   const statusColor = statusColors[status];
@@ -266,16 +266,18 @@ const VehicleMarker: React.FC<VehicleMarkerProps> = ({ position, status, vehicle
       if (onHoverEnd) onHoverEnd();
     };
 
-    const handleClick = (e?: Event) => {
+    const handleClick = () => {
       if (onClick) {
         onClick();
       }
     };
 
+    const handleLeafletClick = () => handleClick();
+
     // Leaflet-Events für den Marker
     marker.on('mouseover', handleMouseOver);
     marker.on('mouseout', handleMouseOut);
-    marker.on('click', handleClick);
+    marker.on('click', handleLeafletClick);
 
     // Zusätzlich: DOM-Events direkt auf das Icon-Element binden (zuverlässiger!)
     const iconElement = marker.getElement();
@@ -288,7 +290,7 @@ const VehicleMarker: React.FC<VehicleMarkerProps> = ({ position, status, vehicle
     return () => {
       marker.off('mouseover', handleMouseOver);
       marker.off('mouseout', handleMouseOut);
-      marker.off('click', handleClick);
+      marker.off('click', handleLeafletClick);
 
       const iconElement = marker.getElement();
       if (iconElement) {
@@ -741,19 +743,23 @@ function App() {
 
       switch (event.key.toLowerCase()) {
         case 'l':
-          setShowProtocolPanel(prev => !prev);
+          setShowProtocolPanel(!showProtocolPanel);
           break;
         case 'p':
         case 'pause':
-          setIsPaused(prev => !prev);
+          if (isPaused) {
+            resumeGame();
+          } else {
+            pauseGame();
+          }
           break;
         case 'y':
-          setGameSpeed(1);
-          setIsPaused(false);
+          setGameSpeedAction(1);
+          resumeGame();
           break;
         case 'x':
-          setGameSpeed(4);
-          setIsPaused(false);
+          setGameSpeedAction(4);
+          resumeGame();
           break;
         case 'escape':
           if (showProtocolPanel) setShowProtocolPanel(false);
@@ -847,7 +853,7 @@ function App() {
       vehicleCallsign,
       statusFrom,
       statusTo,
-      options?.incidentType,
+      options?.incidentType || undefined,
       options?.location
     );
 
@@ -908,13 +914,19 @@ function App() {
       }
     },
     onTogglePause: () => {
-      setIsPaused(prev => !prev);
+      if (isPaused) {
+        resumeGame();
+      } else {
+        pauseGame();
+      }
     },
     onIncreaseSpeed: () => {
-      setGameSpeed(prev => Math.min(4, prev + 1) as 1 | 2 | 3 | 4);
+      const newSpeed = Math.min(4, gameSpeed + 1) as 1 | 2 | 3 | 4;
+      setGameSpeedAction(newSpeed);
     },
     onDecreaseSpeed: () => {
-      setGameSpeed(prev => Math.max(1, prev - 1) as 1 | 2 | 3 | 4);
+      const newSpeed = Math.max(1, gameSpeed - 1) as 1 | 2 | 3 | 4;
+      setGameSpeedAction(newSpeed);
     },
     onSelectVehicle: (vehicleId) => {
       if (vehicles.find(v => v.id === vehicleId)) {
@@ -1077,8 +1089,10 @@ function App() {
         shiftStartTime: gameTime,
         accumulatedTime: 0,
         // 🚔 PATROL SYSTEM
+        isPatrolling: false,
         isOnPatrol: false,
         patrolRoute: null,
+        patrolAreaId: null, // 🔒 FIX: Explizit setzen
         patrolStartTime: null,
         patrolTotalDistance: 0,
         patrolLastDiscoveryCheck: 0,
@@ -1887,10 +1901,11 @@ function App() {
 
     // Update vehicle mit berechneter Route
     setVehicles(prev => prev.map(v =>
-      v.id === vehicleId ? {
+      v.id === vehicleId && result.route ? {
         ...v,
         isOnPatrol: true,
         patrolRoute: result.route,
+        patrolAreaId: result.route.areaId, // 🎯 Gebiet speichern für Random Patrol
         patrolStartTime: Date.now(),
         patrolTotalDistance: 0,
         patrolLastDiscoveryCheck: Date.now(),
@@ -1908,13 +1923,14 @@ function App() {
     if (!vehicle || !vehicle.isOnPatrol) return;
 
     // Streife stoppen
-    stopPatrol(vehicle);
+    stopPatrol();
 
     setVehicles(prev => prev.map(v =>
       v.id === vehicleId ? {
         ...v,
         isOnPatrol: false,
         patrolRoute: null,
+        patrolAreaId: null, // 🎯 Gebiet-Zuordnung löschen
         patrolStartTime: null,
         status: 'S2' as VehicleStatus, // Zurück zur Wache
       } : v
@@ -1977,6 +1993,58 @@ function App() {
     }
   };
 
+  // ⚡ FMS VALIDIERUNG: Zentrale Funktion für sichere Status-Änderungen
+  /**
+   * Ändert den Status eines Fahrzeugs mit FMS-Validierung
+   * @param vehicleId ID des Fahrzeugs
+   * @param newStatus Neuer gewünschter Status
+   * @param force Erzwingt den Übergang (nur für System-Operationen)
+   * @returns true wenn Status geändert wurde
+   */
+  const changeVehicleStatus = (
+    vehicleId: number,
+    newStatus: VehicleStatus,
+    force: boolean = false
+  ): boolean => {
+    let wasChanged = false;
+
+    setVehicles(prev => prev.map(vehicle => {
+      if (vehicle.id !== vehicleId) return vehicle;
+
+      // Validiere Übergang (außer bei force)
+      if (!force) {
+        const validation = validateTransition(vehicle.status, newStatus, vehicleId);
+
+        if (!validation.valid) {
+          console.error(`[FMS VALIDATION] ${validation.error}`);
+          addLog(
+            `⚠️ Ungültiger Status-Übergang: ${getStatusName(vehicle.status)} → ${getStatusName(newStatus)}`,
+            'system'
+          );
+          return vehicle; // Keine Änderung
+        }
+
+        if (validation.warning) {
+          console.warn(`[FMS VALIDATION] ${validation.warning}`);
+        }
+      }
+
+      // Status-Übergang durchführen
+      wasChanged = true;
+      console.log(
+        `[FMS] Fahrzeug ${vehicleId}: ${vehicle.status} → ${newStatus}${force ? ' (forced)' : ''}`
+      );
+
+      return {
+        ...vehicle,
+        status: newStatus,
+        lastStatusChange: Date.now(),
+      };
+    }));
+
+    return wasChanged;
+  };
+
   // Neue Hilfsfunktion: Weise Fahrzeug direkt zu einem Incident-Objekt zu (verhindert Closure-Probleme)
 
   // KRITISCHER FIX: Assign vehicle to incident (mit Error Handling für OSRM + lstsim.de S8-Umleitung)
@@ -2000,13 +2068,20 @@ function App() {
     // Validierung mit aktuellem State
     if (!vehicle || !incident) {
       console.warn(`AssignVehicle: Vehicle ${vehicleId} oder Incident ${incidentId} nicht gefunden`);
+      addLog(`⚠️ Fahrzeug oder Einsatz nicht gefunden`, 'system');
       return;
     }
 
     // FMS-konform: S2 (Frei auf Wache) oder S8 (Rückfahrt, kann umgeleitet werden)
     const canAssign = isVehicleAvailable(vehicle);
 
-    if (!canAssign || incident.assignedVehicleIds.includes(vehicleId)) {
+    if (!canAssign) {
+      addLog(`⚠️ Fahrzeug ${vehicle.callsign || vehicleId} ist nicht verfügbar (${vehicle.status})`, 'system');
+      return;
+    }
+
+    if (incident.assignedVehicleIds.includes(vehicleId)) {
+      addLog(`⚠️ Fahrzeug ${vehicle.callsign || vehicleId} ist bereits diesem Einsatz zugewiesen`, 'system');
       return;
     }
 
@@ -2055,9 +2130,13 @@ function App() {
     const station = policeStations.find(s => s.id === vehicle!.stationId);
     if (!station) return;
 
-    // Bestimme Startposition: Immer von Wache für S2, sonst aktuelle Position (S8 ist bereits unterwegs)
-    // WICHTIG: Für S2 IMMER station.position nutzen, nicht vehicle.position!
-    const startPosition = vehicle!.status === 'S2' ? station.position : vehicle!.position;
+    // Bestimme Startposition:
+    // - S1/S2: Von Wache (station.position)
+    // - S8: Aktuelle Position (bereits unterwegs, wird umgeleitet)
+    // WICHTIG: Für S1/S2 IMMER station.position nutzen, nicht vehicle.position!
+    const startPosition = (vehicle!.status === 'S1' || vehicle!.status === 'S2')
+      ? station.position
+      : vehicle!.position;
 
     // ⏱️ REALISTISCHE AUSRÜCKZEIT: Berechne Verzögerung basierend auf Fahrzeugtyp
     // 🎮 SPIELGESCHWINDIGKEIT: Ausrückzeit beschleunigt
@@ -2143,6 +2222,7 @@ function App() {
           v.id === vehicleId ? {
             ...v,
             status: 'S3' as VehicleStatus,
+            position: safeStartPosition!, // 🔒 WICHTIG: Setze Position auf Startpunkt (Wache für S1/S2)
             isPreparingToDepart: false, // Nicht mehr in Vorbereitung
             route,  // Route ist bereits konvertiert!
             routeDuration,
@@ -2257,7 +2337,7 @@ function App() {
               }
 
               if (serviceCost > 0) {
-                setScore(s => Math.max(0, s - serviceCost));
+                addScore(-serviceCost);
                 addLog(`💰 ${reason} Kosten: -${serviceCost} Punkte`, 'system');
               }
 
@@ -2576,6 +2656,7 @@ function App() {
               const timeDrivenHours = vehicle.routeDuration / 3600; // Sekunden → Stunden
               // 🚁 BUG FIX: Übergebe durationHours für Hubschrauber
               // 🎮 Phase 4: Schwierigkeitsgrad-Multiplikatoren anwenden
+              const settings = getDifficultySettings();
               const fuelConsumed = calculateFuelConsumption(
                 vehicle,
                 distanceKm,
@@ -2883,6 +2964,62 @@ function App() {
     return () => clearInterval(interval);
   }, [gameStarted, gameSpeed, incidents, vehicles]);
 
+  // ⚡ AUTO-TRANSITION: S2 → S1 (Nach Bereitschaftszeit automatisch zu "Frei Funk")
+  useEffect(() => {
+    if (!gameStarted) return;
+
+    // Performance-Check: Nur laufen wenn Fahrzeuge Status S2 haben
+    const hasReadyVehicles = vehicles.some(v => v.status === 'S2');
+    if (!hasReadyVehicles) return;
+
+    // 🎮 SPIELGESCHWINDIGKEIT: Intervall angepasst an gameSpeed
+    const interval = setInterval(() => {
+      setVehicles(prev =>
+        prev.map(vehicle => {
+          // Prüfe S2-Fahrzeuge auf Bereitschaft
+          if (vehicle.status === 'S2') {
+            const currentTime = Date.now();
+            const timeSinceS2 = vehicle.lastStatusChange ? (currentTime - vehicle.lastStatusChange) / 1000 : 0;
+
+            // ⚖️ BALANCING: Bereitschaftszeit (anpassbar über gameplayConstants)
+            const READINESS_TIME = 300; // 5 Minuten (300s) in Echtzeit
+            const adjustedTime = timeSinceS2 * gameSpeed; // Mit Spielgeschwindigkeit multiplizieren
+
+            // Automatischer Übergang zu S1 wenn:
+            // - Genug Zeit vergangen (5 Min)
+            // - Treibstoff > 80%
+            // - Crew-Fatigue < 20%
+            // - Wartung OK
+            if (
+              adjustedTime >= READINESS_TIME &&
+              vehicle.fuelLevel > 80 &&
+              vehicle.crewFatigue < 20 &&
+              vehicle.maintenanceStatus === 'ok'
+            ) {
+              // Automatischer Übergang zu S1
+              addLog(`S-${vehicle.id.toString().padStart(2, '0')} S2→S1 Automatisch einsatzbereit`, 'system');
+
+              // ⚡ FUNKSPRUCH: S2 → S1 (Automatische Bereitschaft)
+              addRadioMessage(vehicle.id, 'S2', 'S1', {
+                location: policeStations.find(s => s.id === vehicle.stationId)?.name,
+              });
+
+              return {
+                ...vehicle,
+                status: 'S1' as VehicleStatus,
+                lastStatusChange: currentTime,
+              };
+            }
+          }
+
+          return vehicle;
+        })
+      );
+    }, 1000 / gameSpeed); // 🎮 SPIELGESCHWINDIGKEIT: Intervall beschleunigt
+
+    return () => clearInterval(interval);
+  }, [gameStarted, gameSpeed, vehicles]);
+
   // Eskalations-System (Optimierung: nur wenn eskalationsfähige Einsätze vorhanden sind)
   useEffect(() => {
     if (!gameStarted) return;
@@ -2986,20 +3123,8 @@ function App() {
 
               // ✨ OPTION A: Setze Status auf 'completed' statt Einsatz zu löschen
               if (incident.status !== 'completed') {
-                setScore(s => s + points + bonus);
-
-                setStatistics(prev => ({
-                  ...prev,
-                  totalResolved: prev.totalResolved + 1,
-                  totalResponseTimes: [...prev.totalResponseTimes, responseTime],
-                  incidentsByType: {
-                    ...prev.incidentsByType,
-                    [incident.type]: (prev.incidentsByType[incident.type] || 0) + 1,
-                  },
-                  currentStreak: prev.currentStreak + 1,
-                  bestStreak: Math.max(prev.bestStreak, prev.currentStreak + 1),
-                  totalDistance: prev.totalDistance + vehicles.reduce((sum, v) => sum + v.totalDistanceTraveled, 0),
-                }));
+                addScore(points + bonus);
+                incrementStat('totalResolved');
 
                 // Erfolgs-Sound bleibt synthetisch (da keine authentische Alternative)
                 htmlAudioManager.playSuccessChime();
@@ -3023,6 +3148,26 @@ function App() {
 
           return incident;
         }).map(i => {
+          // ⚖️ PRIORITY-DEGRADATION: Erhöhe Priorität bei langer Wartezeit
+          // Low → Medium nach 5 Min, Medium → High nach 10 Min
+          if (i && i.status === 'active' && i.assignedVehicleIds.length === 0) {
+            const currentGameSeconds = (gameTime * 60) + gameTimeSeconds;
+            const waitingTime = currentGameSeconds - i.spawnTime; // In Sekunden
+
+            // Low → Medium nach 300 Sekunden (5 Min)
+            if (i.priority === 'low' && waitingTime >= 300 && !i.priorityUpgraded) {
+              addLog(`⚠️ Priorität erhöht: ${i.type} in ${i.locationName} (Low → Medium)`, 'system');
+              return { ...i, priority: 'medium' as 'low' | 'medium' | 'high', priorityUpgraded: true };
+            }
+
+            // Medium → High nach 600 Sekunden (10 Min)
+            if (i.priority === 'medium' && waitingTime >= 600 && !i.priorityUpgraded) {
+              addLog(`⚠️ Priorität erhöht: ${i.type} in ${i.locationName} (Medium → High)`, 'system');
+              realisticSoundManager.playQuattroneAlert(0.5); // Alarm bei High-Upgrade
+              return { ...i, priority: 'high' as 'low' | 'medium' | 'high', priorityUpgraded: true };
+            }
+          }
+
           // ✨ OPTION A: Markiere fehlgeschlagene Einsätze als 'failed'
           if (i && i.timeRemaining <= 0 && i.status !== 'failed') {
             setStatistics(prev => ({
@@ -3032,6 +3177,12 @@ function App() {
             }));
             htmlAudioManager.playFailureSound();
             addLog(`Einsatz ${i.type} in ${i.locationName} fehlgeschlagen (Zeit abgelaufen)`, 'failed');
+
+            // ⚖️ PENALTIES: Score-Abzug für fehlgeschlagene Einsätze
+            // Basiert auf Priorität: High = -30, Medium = -20, Low = -10
+            const penalty = i.priority === 'high' ? -30 : i.priority === 'medium' ? -20 : -10;
+            addScore(penalty);
+            addLog(`Score-Penalty: ${penalty} Punkte (${i.priority} Priorität)`, 'failed');
 
             return {
               ...i,
@@ -3159,10 +3310,22 @@ function App() {
 
       // Berechne nächstes Intervall (MIT TAGESZEIT, WETTER, SPIELGESCHWINDIGKEIT und Variation!)
       // 🎮 SPIELGESCHWINDIGKEIT: Einsätze kommen gameSpeed-mal schneller
-      const nextInterval = (baseInterval * timeMultiplier * weatherMultiplier * randomFactor) / gameSpeed;
+      let nextInterval = (baseInterval * timeMultiplier * weatherMultiplier * randomFactor) / gameSpeed;
+
+      // ⚖️ BALANCING: Minimum-Intervall um Spawn-Spam zu verhindern
+      // Bei Schwer + Rush Hour + gameSpeed 4x würden sonst alle 90s Einsätze spawnen!
+      const MIN_INTERVAL_MS = 8000; // Mindestens 8 Sekunden zwischen Calls
+      nextInterval = Math.max(MIN_INTERVAL_MS, nextInterval);
 
       const timeout = setTimeout(() => {
-        if (!isCancelled && incidents.length < settings.maxIncidents) {
+        // ✅ ZUSÄTZLICHER CHECK: Nur spawnen wenn genug freie Fahrzeuge
+        const availableVehicles = vehicles.filter(v => v.status === 'S1' || v.status === 'S2').length;
+        const activeIncidents = incidents.filter(i => i.status === 'active').length;
+        const shouldSpawn =
+          incidents.length < settings.maxIncidents &&
+          (availableVehicles > activeIncidents || activeIncidents === 0); // Erster Call immer erlaubt
+
+        if (!isCancelled && shouldSpawn) {
           generateIncident();
         }
         scheduleNextIncident(); // Schedule next incident
@@ -3242,25 +3405,38 @@ function App() {
           // Route completed?
           if (movement.routeCompleted) {
             // 🎲 RANDOM PATROL: Generiere neue Route statt Streife zu beenden!
-            console.log(`[PATROL] ${vehicle.callsign} beendet Route, generiere neue...`);
+            console.log(`[PATROL] ${vehicle.callsign} beendet Route an Position [${movement.newPosition[0].toFixed(4)}, ${movement.newPosition[1].toFixed(4)}]`);
+
+            // 🔑 WICHTIG: Nutze die AKTUELLE Position (Ende der Route) für die neue Route!
+            const currentPosition = movement.newPosition;
 
             // Generiere asynchron neue Route (non-blocking)
             (async () => {
               try {
+                // ✅ Erstelle temporäres Vehicle-Objekt mit aktueller Position
+                const vehicleAtCurrentPosition = {
+                  ...vehicle,
+                  position: currentPosition, // 🎯 WICHTIG: Neue Route startet von HIER!
+                };
+
                 const newRouteResult = await startPatrol(
-                  vehicle,
+                  vehicleAtCurrentPosition,
                   gameTime,
                   hour,
                   weather.current,
-                  'random' // ✅ Immer Random-Patrol für Abwechslung!
+                  'random', // ✅ Immer Random-Patrol für Abwechslung!
+                  vehicle.patrolAreaId || undefined // 🎯 IM SELBEN GEBIET BLEIBEN!
                 );
 
                 if (newRouteResult.success && newRouteResult.route) {
-                  // Update Vehicle mit neuer Route
+                  console.log(`[PATROL] ✓ Neue Route generiert: ${newRouteResult.route.fullRoute.length} Punkte, Start: [${newRouteResult.route.fullRoute[0][0].toFixed(4)}, ${newRouteResult.route.fullRoute[0][1].toFixed(4)}]`);
+
+                  // Update Vehicle mit neuer Route UND aktueller Position
                   setVehicles(prev => prev.map(v => {
                     if (v.id === vehicle.id) {
                       return {
                         ...v,
+                        position: currentPosition, // ✅ Position aktualisieren
                         patrolRoute: newRouteResult.route,
                         patrolTotalDistance: v.patrolTotalDistance || 0, // Distanz beibehalten
                       };
@@ -3469,8 +3645,9 @@ function App() {
 
     const updatedIncidents = incidentsNeedingCheck.filter(inc => {
       // Zähle wie viele Fahrzeuge zusätzlich zugewiesen wurden
-      const additionalAssigned = inc.assignedVehicleIds.length - (inc.requiredVehicles - inc.backupVehiclesNeeded);
-      return additionalAssigned >= inc.backupVehiclesNeeded;
+      const backupNeeded = inc.backupVehiclesNeeded || 0;
+      const additionalAssigned = inc.assignedVehicleIds.length - (inc.requiredVehicles - backupNeeded);
+      return additionalAssigned >= backupNeeded;
     });
 
     // Nur updaten wenn wirklich etwas geändert werden muss
@@ -3909,14 +4086,14 @@ function App() {
                       positions={vehicle.route}
                       color={(() => {
                         const statusColors: Record<VehicleStatus, string> = {
-                          'S1': '#30D158',  // Grün - Bereit
-                          'S2': '#FFD60A',  // Gelb - Alarmiert
-                          'S3': '#FF9F0A',  // Orange - Anfahrt
+                          'S1': '#90EE90',  // Hellgrün - Frei auf Funk (LST-SIM Style)
+                          'S2': '#228B22',  // Dunkelgrün - Frei auf Wache (LST-SIM Style)
+                          'S3': '#FFD60A',  // Gelb - Einsatz übernommen
                           'S4': '#FF453A',  // Rot - Am Einsatzort
                           'S5': '#0A84FF',  // Blau - Sprechwunsch
                           'S6': '#8E8E93',  // Grau - Nicht einsatzbereit
-                          'S7': '#BF5AF2',  // Lila - Pause
-                          'S8': '#0A84FF',  // Blau - Rückfahrt
+                          'S7': '#FFB6C1',  // Altrosa - Tanken (LST-SIM Style)
+                          'S8': '#9370DB',  // Violett - Rückfahrt (LST-SIM Style)
                         };
                         return statusColors[vehicle.status] || '#0A84FF';
                       })()}
@@ -4421,7 +4598,7 @@ function App() {
                       const seconds = gameTimeSeconds;
                       const timestamp = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-                      const responseId = radioMessageIdRef.current++;
+                      const responseId = Date.now();
                       const responseMessage: RadioMessage = {
                         id: responseId,
                         timestamp,
